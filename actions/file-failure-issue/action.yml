@@ -1,0 +1,75 @@
+name: File a failure issue
+description: >
+  Open an issue for an automation failure nobody is watching, and reuse the
+  existing one instead of filing a duplicate on every run.
+
+inputs:
+  title:
+    description: Issue title. Also the deduplication key, so keep it stable across runs.
+    required: true
+  body-file:
+    description: Path to a file holding the issue body.
+    required: true
+  labels:
+    description: Comma-separated labels to apply.
+    required: false
+    default: 'type:bug,status:ready'
+  token:
+    description: Token with issues:write.
+    required: true
+
+outputs:
+  number:
+    description: The issue number filed or commented on.
+    value: ${{ steps.file.outputs.number }}
+
+runs:
+  using: composite
+  steps:
+    # A scheduled or event-driven job that fails silently is the case this exists
+    # for: nothing is watching the Actions tab, so the failure has to arrive
+    # somewhere with a queue. Filing a fresh issue per run instead buries the
+    # first one, so an open match is reused.
+    - name: File or update the issue
+      id: file
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TITLE: ${{ inputs.title }}
+        BODY_FILE: ${{ inputs.body-file }}
+        LABELS: ${{ inputs.labels }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$BODY_FILE" ]; then
+          echo "::error title=Missing body file::$BODY_FILE does not exist."
+          exit 1
+        fi
+
+        existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+          --search "$TITLE in:title" --json number,title \
+          --jq "[.[] | select(.title == \"$TITLE\")] | first | .number // empty")
+
+        if [ -n "$existing" ]; then
+          {
+            echo "Recurred — $RUN_URL"
+            echo
+            cat "$BODY_FILE"
+          } | gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file -
+          echo "number=$existing" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Reused issue::#$existing already tracks this."
+          exit 0
+        fi
+
+        args=()
+        IFS=',' read -ra names <<< "$LABELS"
+        for name in "${names[@]}"; do
+          [ -n "$name" ] && args+=(--label "$name")
+        done
+
+        url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
+          --title "$TITLE" --body-file "$BODY_FILE" "${args[@]}")
+        number="${url##*/}"
+        echo "number=$number" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Filed issue::$url"

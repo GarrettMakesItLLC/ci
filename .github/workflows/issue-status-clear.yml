@@ -1,0 +1,47 @@
+name: Clear status label on issue close
+
+# A closed issue must carry no `status:*` label — done is expressed by the closed
+# state, and a leftover `status:in-review` reads as live work on something that
+# shipped weeks ago. Auto-close via `Closes #N` strips nothing by itself, so the
+# invariant holds here by construction rather than by periodic sweep.
+#
+# Called as:
+#
+#   clear-status:
+#     uses: GarrettMakesItLLC/ci/.github/workflows/issue-status-clear.yml@v1
+
+on:
+  workflow_call:
+
+permissions:
+  issues: write
+
+jobs:
+  clear-status-label:
+    name: Clear status label
+    # Skip the runner entirely when there is nothing to remove — an issue close is
+    # frequent and each job bills a whole minute.
+    if: contains(join(github.event.issue.labels.*.name, ','), 'status:')
+    runs-on: ubuntu-latest
+    # A couple of label API calls — seconds. Capped so a hung call cannot inherit
+    # the 360-minute default.
+    timeout-minutes: 5
+    steps:
+      - name: Remove status:* labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            const statusLabels = context.payload.issue.labels
+              .map((label) => label.name)
+              .filter((name) => name.startsWith('status:'));
+            for (const name of statusLabels) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+              } catch (error) {
+                // 404 = someone removed it between the event and now; that is the
+                // desired end state, not a failure.
+                if (error.status !== 404) throw error;
+              }
+            }

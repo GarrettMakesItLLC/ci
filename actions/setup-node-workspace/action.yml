@@ -1,0 +1,87 @@
+name: Setup Node workspace
+description: >
+  Node plus a workspace-aware dependency cache, and an install that is skipped on a
+  cache hit. Handles npm and pnpm.
+
+inputs:
+  node-version:
+    description: Node major to install.
+    required: false
+    default: '20'
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  install:
+    description: Run the install step. Set false to cache only.
+    required: false
+    default: 'true'
+  cache-key-extra:
+    description: >
+      Extra material for the cache key — pass a Prisma schema hash where a
+      generated client is part of what is being cached.
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: Whether the dependency cache restored exactly.
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the lockfile
+      id: lock
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+      run: |
+        case "$PM" in
+          npm)  file=package-lock.json ;;
+          pnpm) file=pnpm-lock.yaml ;;
+          *)    echo "::error::Unsupported package-manager '$PM' (npm or pnpm)."; exit 1 ;;
+        esac
+        if [ ! -f "$file" ]; then
+          echo "::error title=No lockfile::Expected $file for package-manager=$PM."
+          exit 1
+        fi
+        echo "file=$file" >> "$GITHUB_OUTPUT"
+
+    - name: Install pnpm
+      if: inputs.package-manager == 'pnpm'
+      uses: pnpm/action-setup@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Nested workspace node_modules, not just the root. A monorepo installs most
+    # of its tree into apps/*/node_modules and packages/*/node_modules, so caching
+    # only the root restores a fraction of the install and every job pays for the
+    # rest.
+    - name: Restore dependencies
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+        key: >-
+          deps-${{ runner.os }}-${{ inputs.package-manager }}-${{ inputs.node-version }}-${{
+          hashFiles(steps.lock.outputs.file) }}-${{ inputs.cache-key-extra }}
+
+    # Gated on a cache miss. A full install on a hit is the single largest piece of
+    # wasted CI time in a monorepo, and it buys nothing the cache did not restore.
+    - name: Install
+      if: inputs.install == 'true' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+      run: |
+        if [ "$PM" = "pnpm" ]; then
+          pnpm install --frozen-lockfile
+        else
+          npm ci
+        fi
