@@ -1,0 +1,97 @@
+name: Self check
+
+# This repo has the widest blast radius of any here: a bad push lands in every
+# consumer at once, and there is no staging tier for a shared action. Its own
+# workflows and action definitions therefore have to be linted here, because
+# nowhere downstream will catch them before they run.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint actions and workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # actionlint understands reusable-workflow and composite-action schemas, so
+      # it catches a bad `inputs:` block or an undefined context here rather than
+      # in a consumer's first red run.
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+        with:
+          fail-on-error: true
+
+      # actionlint does not check composite actions under actions/*, only
+      # workflows — so validate those separately: every action.yml must parse and
+      # declare the fields the runner requires.
+      - name: Composite actions declare what the runner needs
+        run: |
+          fail=0
+          shopt -s nullglob
+          found=0
+          for f in actions/*/action.yml; do
+            found=$((found + 1))
+            for key in name description runs; do
+              grep -qE "^${key}:" "$f" || { echo "::error file=$f::missing top-level '${key}:'"; fail=1; }
+            done
+            grep -qE "^  using: composite" "$f" || { echo "::error file=$f::runs.using must be 'composite'"; fail=1; }
+            # Every step in a composite action must declare a shell, and the
+            # runner's error for a missing one names no file.
+            awk -v f="$f" '
+              /^    - / { instep=1; hasrun=0; hasshell=0; hasuses=0 }
+              /^      run:/   { hasrun=1 }
+              /^      shell:/ { hasshell=1 }
+              /^      uses:/  { hasuses=1 }
+              /^    - |^$/ {
+                if (instep && hasrun && !hasshell && !hasuses) {
+                  printf "::error file=%s::a run: step is missing shell:\n", f; exit 1
+                }
+              }
+            ' "$f" || fail=1
+          done
+          [ "$found" -eq 0 ] && { echo "::error::no composite actions found — did the layout change?"; fail=1; }
+          echo "checked $found composite action(s)"
+          exit "$fail"
+
+      # The README is the consumer-facing contract. If it tells people to pin
+      # @main, someone will.
+      - name: README pins a tag, never @main
+        run: |
+          if grep -nE "GarrettMakesItLLC/ci[^@]*@main" README.md CLAUDE.md; then
+            echo "::error::docs must pin a version tag, never @main"
+            exit 1
+          fi
+          echo "ok"
+
+  ci-success:
+    name: CI Success
+    if: always() && github.event_name == 'pull_request'
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify no required job failed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$RESULTS")
+          if [ -n "$bad" ]; then
+            echo "::error::$bad"
+            exit 1
+          fi
+          echo "All required jobs succeeded."
