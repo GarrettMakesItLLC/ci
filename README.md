@@ -8,10 +8,22 @@ identical across them.
 | Path | Kind | Use |
 | --- | --- | --- |
 | `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. |
+| `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
+| `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
-| `.github/workflows/ci-success.yml` | reusable | The one aggregate required status check. Fails when a required job was **skipped**. |
-| `.github/workflows/pr-title-lint.yml` | reusable | Conventional-Commit check on the PR title. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
+
+## Why almost everything here is a composite action
+
+A job that calls a **reusable workflow** produces a check named
+`<caller-job> / <callee-job>`, not a bare name. The branch rulesets in every repo require the exact
+contexts **`CI Success`** and **`Semantic PR Title`**, so a reusable workflow can never satisfy them —
+and pointing a ruleset at the compound name would couple it to the caller's job id, which is the
+opposite of portable.
+
+A composite action runs inside a job the caller declares and names, so the check name stays the
+caller's to control. `issue-status-clear` is the one reusable workflow left, because it is triggered by
+an `issues` event rather than gating a PR — nothing requires its name.
 
 ## Consuming it
 
@@ -29,19 +41,23 @@ jobs:
           package-manager: npm
       - run: npm run lint
 
+  # The job name IS the required-status-check context. Do not rename it.
   ci-success:
+    name: CI Success
     # `always()` so it still runs when a dependency failed — that is the case it
     # reports on. Restricted to pull_request because it is the PR gate.
     if: always() && github.event_name == 'pull_request'
     needs: [lint]
-    uses: GarrettMakesItLLC/ci/.github/workflows/ci-success.yml@v1
-    with:
-      needs: ${{ toJSON(needs) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: GarrettMakesItLLC/ci/actions/ci-success@v1
+        with:
+          needs: ${{ toJSON(needs) }}
 ```
 
-The caller passes its own `needs` context because a reusable workflow cannot read the caller's job
-graph. `ci-success` then reports on exactly what that repo declared, so this repo never needs to know
-any consumer's job names.
+The caller passes its own `needs` context because an action cannot read the caller's job graph.
+`ci-success` then reports on exactly what that repo declared, so this repo never needs to know any
+consumer's job names.
 
 ### Private-repo access
 
