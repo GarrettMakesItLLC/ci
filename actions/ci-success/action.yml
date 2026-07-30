@@ -1,0 +1,68 @@
+name: Verify required jobs
+description: >
+  Fail when any job the caller depended on failed, was cancelled, or was skipped.
+  The aggregate every branch ruleset requires.
+
+# A composite action, deliberately not a reusable workflow. A job that calls a
+# reusable workflow with `uses:` produces a check named
+# `<caller-job> / <callee-job>` — so it can never emit the bare `CI Success`
+# context the rulesets require, and pointing a ruleset at the compound name
+# couples it to the caller's job id. Run inside a job the caller names instead,
+# and the check name stays the caller's to control.
+
+inputs:
+  needs:
+    description: The caller's `needs` context, passed as `toJSON(needs)`.
+    required: true
+  allow-skipped:
+    description: >
+      Comma-separated job ids permitted to skip. For a job that is genuinely
+      optional for the change — never to quiet a real gap.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Why this exists at all: **a skipped job satisfies a required status check of
+    # the same name.** Requiring the real jobs directly means a path-filtered or
+    # draft-gated job that skipped lets a PR merge unverified — a green check over
+    # nothing, which is the most dangerous shape CI can take. Requiring only this
+    # one also means adding or splitting jobs never involves editing a ruleset.
+    - name: Check every required job's result
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+        ALLOW_SKIPPED: ${{ inputs.allow-skipped }}
+      run: |
+        set -uo pipefail
+        echo "$NEEDS"
+
+        if ! jq -e 'type == "object" and length > 0' <<<"$NEEDS" >/dev/null 2>&1; then
+          echo "::error title=No dependencies::needs was empty — pass toJSON(needs) and declare needs:."
+          exit 1
+        fi
+
+        allowed=",${ALLOW_SKIPPED// /},"
+        failed=0
+
+        while IFS=$'\t' read -r job result; do
+          [ -z "$job" ] && continue
+          case "$result" in
+            success)
+              echo "ok       $job" ;;
+            skipped)
+              if [ "$allowed" != ",," ] && [[ "$allowed" == *",$job,"* ]]; then
+                echo "skipped  $job (allowed)"
+              else
+                echo "::error title=Required job skipped::$job was skipped but had work to do."
+                failed=1
+              fi ;;
+            *)
+              echo "::error title=Required job $result::$job reported '$result'."
+              failed=1 ;;
+          esac
+        done < <(jq -r 'to_entries[] | "\(.key)\t\(.value.result)"' <<<"$NEEDS")
+
+        [ "$failed" -ne 0 ] && exit 1
+        echo "All required jobs succeeded."

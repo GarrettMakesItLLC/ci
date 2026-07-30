@@ -1,0 +1,43 @@
+name: Lint the PR title
+description: >
+  Check the pull-request title against Conventional Commits. Required on every
+  squash-merge repo, where the title becomes the commit subject.
+
+# Composite rather than reusable workflow for the same reason as `ci-success`: a
+# reusable workflow's check is named `<caller-job> / <callee-job>`, which cannot
+# match the bare `Semantic PR Title` context the rulesets require.
+
+inputs:
+  types:
+    description: Newline-separated allowed Conventional Commit types.
+    required: false
+    default: |
+      feat
+      fix
+      perf
+      refactor
+      docs
+      chore
+      test
+      build
+      ci
+      style
+      revert
+  require-scope:
+    description: Require a scope in the title.
+    required: false
+    default: 'false'
+  token:
+    description: Token with pull-requests read access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: amannn/action-semantic-pull-request@v6
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+      with:
+        types: ${{ inputs.types }}
+        requireScope: ${{ inputs.require-scope }}

@@ -15,9 +15,11 @@ staging tier for a shared action. That asymmetry drives every rule below.
 - A backward-compatible change moves the `v1` tag. A breaking change cuts `v2` and consumers migrate
   deliberately — never repoint `v1` at incompatible behaviour.
 - Adding a required input is breaking. Adding an optional input with a default is not.
-- Renaming a job inside a reusable workflow is breaking when a branch ruleset requires that job's
-  name. `ci-success.yml`'s job produces the **`CI Success`** check that every repo's ruleset points
-  at; renaming it silently unprotects every default branch.
+- **Prefer a composite action over a reusable workflow for anything a ruleset requires.** A job
+  calling a reusable workflow emits a check named `<caller-job> / <callee-job>`, which cannot match the
+  bare `CI Success` and `Semantic PR Title` contexts the rulesets require. A composite action runs
+  inside a job the caller names, leaving the check name where it belongs. `issue-status-clear` stays a
+  reusable workflow because it fires on an `issues` event and gates nothing.
 
 ## Layout
 
