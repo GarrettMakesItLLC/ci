@@ -45,7 +45,7 @@ jobs:
   ci-success:
     name: CI Success
     # `always()` so it still runs when a dependency failed — that is the case it
-    # reports on. Restricted to pull_request because it is the PR gate.
+    # reports on.
     if: always() && github.event_name == 'pull_request'
     needs: [lint]
     runs-on: ubuntu-latest
@@ -58,6 +58,54 @@ jobs:
 The caller passes its own `needs` context because an action cannot read the caller's job graph.
 `ci-success` then reports on exactly what that repo declared, so this repo never needs to know any
 consumer's job names.
+
+### Repos running a merge queue: one check, both events
+
+`actions/ci-success` has no event gating of its own — it only reads `inputs.needs`. A repo running a
+GitHub Enterprise merge queue does **not** add a second job or a second required check. It widens the
+same `ci-success` job's `if:` to also run on `merge_group`, and widens `needs:` to cover both tiers of
+jobs:
+
+```yaml
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps: [...] # Tier 1: fast, path-filtered — lint/typecheck/unit. pull_request only.
+
+  e2e:
+    # Tier 2 only: `merge_group` is a ref-update trigger, not a PR event — a job
+    # triggered by it does not see github.event.pull_request. Anything reading PR
+    # context has to move or be adjusted when it moves into this job.
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps: [...] # e2e / a11y / any suite too slow for the PR lane.
+
+  # The one required check, on both events. Do not split this into a second job —
+  # a branch ruleset requires exactly one context (`CI Success`), and GitHub's
+  # merge queue re-validates every required context against the merge group's
+  # synthetic commit, so the same check name has to post on both events or the
+  # queue entry hangs waiting for a context that never arrives.
+  ci-success:
+    name: CI Success
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [lint, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: GarrettMakesItLLC/ci/actions/ci-success@v1
+        with:
+          needs: ${{ toJSON(needs) }}
+```
+
+`ci-success`'s own "did anything skip that shouldn't have" check is naturally event-aware without any
+extra input: on `pull_request`, `e2e` is *expected* to have skipped (it only runs on `merge_group`) —
+pass it via `allow-skipped: e2e` (or list every Tier-2-only job id, comma-separated) so the composite
+doesn't fail the PR lane over a job that correctly didn't run. On `merge_group`, `lint` has already
+run to completion on the same commits during the PR lane and is *expected* to skip again in the
+queue if the consumer path-filters it to `pull_request` only — add it to `allow-skipped` too if that's
+how the job is written; if `lint` is unconditional (no `if:`), it re-runs on `merge_group` and
+reports `success`, needing no allowance. Either way, never drop a job from `needs:` just to dodge this
+— that reintroduces the "green over nothing" gap `allow-skipped` exists to name explicitly instead of
+silently.
 
 ### Private-repo access
 
