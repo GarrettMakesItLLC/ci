@@ -9,7 +9,12 @@ description: >
 
 inputs:
   types:
-    description: Newline-separated allowed Conventional Commit types.
+    description: >
+      Newline-separated allowed Conventional Commit types. The default MUST stay
+      in step with `COMMIT_TYPES` in `@gmi/commitlint-config`, which is what the
+      local commit-msg hook enforces in every consumer — two lists that disagree
+      mean a commit passes the hook and its PR title is rejected with nothing
+      saying why.
     required: false
     default: |
       feat
@@ -23,6 +28,8 @@ inputs:
       ci
       style
       revert
+      ops
+      content
   require-scope:
     description: Require a scope in the title.
     required: false
