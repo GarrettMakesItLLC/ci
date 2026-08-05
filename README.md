@@ -115,6 +115,28 @@ jobs:
 `secrets: inherit` passes the caller's own secrets (`RELEASE_PAT`, `GITHUB_TOKEN`) through — the
 reusable workflow never needs them named individually in the consumer.
 
+A called workflow's own `permissions:` block can only narrow what the run was granted, never widen
+it — so if a repo's default `GITHUB_TOKEN` permission is `read` (common), a caller that omits
+`permissions:` mints a read-only token for the run, and `issue-status-clear.yml`'s `issues: write`
+request then exceeds it. That fails the whole run at `startup_failure` with zero jobs, before any
+job output exists to explain why. The caller must grant the permission explicitly on the job that
+calls it:
+
+```yaml
+# .github/workflows/issue-status-clear.yml
+name: Clear status label on issue close
+
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  clear-status:
+    permissions:
+      issues: write
+    uses: GarrettMakesItLLC/ci/.github/workflows/issue-status-clear.yml@v1
+```
+
 ### Repos running a merge queue: one check, both events
 
 `actions/ci-success` has no event gating of its own — it only reads `inputs.needs`. A repo running a
