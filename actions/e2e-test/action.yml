@@ -1,0 +1,83 @@
+name: E2E test
+description: >
+  Install Playwright browsers (cached, keyed on the lockfile-resolved version)
+  and run the repo's e2e script. Tier 2 by nature — too slow for the PR lane,
+  gated on `merge_group` in the two-tier model (see `~/dotclaude/rules/ci.md`).
+
+# Composite, not a reusable workflow: even a Tier 2 job posts through the
+# caller's own `ci-success` needs: graph, which only works inside the caller's
+# job.
+
+inputs:
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  script:
+    description: package.json script to run.
+    required: false
+    default: test:e2e
+  install-deps:
+    description: Also install Playwright's OS-level dependencies (apt packages).
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # Keyed on the lockfile-resolved version, not a hardcoded one — a version
+    # bump in the lockfile invalidates this on its own rather than going stale
+    # silently.
+    - name: Resolve Playwright version
+      id: version
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          v=$(pnpm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.[0].devDependencies["@playwright/test"].version // .[0].dependencies["@playwright/test"].version')
+        else
+          v=$(npm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.dependencies["@playwright/test"].version // empty')
+        fi
+        if [ -z "$v" ] || [ "$v" = "null" ]; then
+          echo "::error title=Playwright not found::@playwright/test is not a resolvable dependency."
+          exit 1
+        fi
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Playwright browsers
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}
+
+    - name: Install Playwright browsers
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        DEPS: ${{ inputs.install-deps }}
+      run: |
+        set -euo pipefail
+        flag=""
+        [ "$DEPS" = "true" ] && flag="--with-deps"
+        if [ "$PM" = "pnpm" ]; then
+          pnpm exec playwright install $flag
+        else
+          npx playwright install $flag
+        fi
+
+    - name: Run e2e tests
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        SCRIPT: ${{ inputs.script }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          pnpm run "$SCRIPT"
+        else
+          npm run "$SCRIPT"
+        fi
