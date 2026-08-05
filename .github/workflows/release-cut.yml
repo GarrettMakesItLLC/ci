@@ -177,7 +177,7 @@ jobs:
       # A cut that produced a branch nobody promotes is the failure mode worth
       # catching: the branch sits, `dev` keeps moving, and the next cut refuses
       # because a promotion is already open.
-      - name: Write the failure body
+      - name: Compose the cut-failure body
         if: failure() && steps.pr.outcome == 'failure'
         run: |
           cat >/tmp/cut-failure.md <<EOF
@@ -199,14 +199,18 @@ jobs:
           to run while a promotion is open.
           EOF
 
+      # `ci-failure` is load-bearing, not decoration: repos with a
+      # close-failure-issue.sh match open issues carrying it, by exact title,
+      # to close this one once a cut succeeds. Drop the label and the issue is
+      # never closed.
       - name: File an issue if the PR could not be opened
         if: failure() && steps.pr.outcome == 'failure'
         uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
         with:
-          title: 'Release cut could not open its promotion PR'
+          title: Release cut could not open its promotion PR
           body-file: /tmp/cut-failure.md
-          labels: 'area:platform,type:bug,status:ready,source:agent'
-          token: ${{ github.token }}
+          labels: ci-failure,area:platform,type:bug,status:ready,source:agent
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Tell the promoter what to do next
         if: steps.diff.outputs.count != '0'
