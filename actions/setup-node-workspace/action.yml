@@ -22,6 +22,21 @@ inputs:
       generated client is part of what is being cached.
     required: false
     default: ''
+  cache-path-extra:
+    description: >
+      Extra newline-separated paths appended to the cached path list — for a
+      generated artefact outside node_modules (e.g. a Prisma client emitted to
+      prisma/generated/) that should live and expire with the dependency cache.
+    required: false
+    default: ''
+  pre-install-run:
+    description: >
+      Shell run as a step between setup-node and the install — e.g.
+      `corepack enable npm` to pin npm to the version in packageManager before
+      it installs. Runs even when install is false, so a cache-only caller can
+      still use it to prep the environment. Empty (the default) adds no step.
+    required: false
+    default: ''
 
 outputs:
   cache-hit:
@@ -52,14 +67,24 @@ runs:
       if: inputs.package-manager == 'pnpm'
       uses: pnpm/action-setup@v4
 
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}
+
+    # The seam between setup-node and the install — e.g. pinning npm via Corepack,
+    # which has to run after the Node install (the shim is per-install) and before
+    # `npm ci` reads it. Empty by default, so callers that don't need it pay
+    # nothing.
+    - name: Pre-install hook
+      if: inputs.pre-install-run != ''
+      shell: bash
+      run: ${{ inputs.pre-install-run }}
 
     # Nested workspace node_modules, not just the root. A monorepo installs most
     # of its tree into apps/*/node_modules and packages/*/node_modules, so caching
     # only the root restores a fraction of the install and every job pays for the
-    # rest.
+    # rest. cache-path-extra covers a generated artefact outside node_modules that
+    # should expire with the same cache.
     - name: Restore dependencies
       id: cache
       uses: actions/cache@v6
@@ -68,6 +93,7 @@ runs:
           node_modules
           apps/*/node_modules
           packages/*/node_modules
+          ${{ inputs.cache-path-extra }}
         key: >-
           deps-${{ runner.os }}-${{ inputs.package-manager }}-${{ inputs.node-version }}-${{
           hashFiles(steps.lock.outputs.file) }}-${{ inputs.cache-key-extra }}
