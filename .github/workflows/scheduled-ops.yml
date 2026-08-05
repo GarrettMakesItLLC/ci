@@ -1,0 +1,118 @@
+name: Scheduled ops
+
+# Two independent maintenance jobs a repo runs on a cron it owns: bump stale
+# dependencies via a PR, and close/label issues nobody has touched. Neither
+# gates a PR, so — unlike everything under actions/* — this is a reusable
+# workflow rather than a composite action; there is no required-check name to
+# preserve.
+#
+# Called as:
+#
+#   on:
+#     schedule:
+#       - cron: '0 6 * * 1'
+#     workflow_dispatch:
+#
+#   jobs:
+#     ops:
+#       uses: GarrettMakesItLLC/ci/.github/workflows/scheduled-ops.yml@v1
+#       with:
+#         package-manager: npm
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      package-manager:
+        description: npm or pnpm.
+        type: string
+        default: npm
+      run-dependency-bump:
+        description: Open a PR bumping outdated dependencies.
+        type: boolean
+        default: true
+      run-stale-check:
+        description: Label and close stale issues/PRs.
+        type: boolean
+        default: true
+      stale-days:
+        description: Days of inactivity before an issue/PR is marked stale.
+        type: number
+        default: 60
+      stale-close-days:
+        description: Days after being marked stale before closing.
+        type: number
+        default: 14
+      dependency-bump-branch:
+        description: Branch the dependency-bump PR is opened from/to.
+        type: string
+        default: chore/scheduled-dependency-bump
+
+jobs:
+  dependency-bump:
+    name: Bump dependencies
+    if: inputs.run-dependency-bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@v1
+        with:
+          package-manager: ${{ inputs.package-manager }}
+          install: 'false'
+
+      - name: Bump outdated dependencies
+        shell: bash
+        env:
+          PM: ${{ inputs.package-manager }}
+        run: |
+          set -euo pipefail
+          if [ "$PM" = "pnpm" ]; then
+            corepack enable pnpm
+            npx --yes npm-check-updates --packageManager pnpm -u
+            pnpm install
+          else
+            npx --yes npm-check-updates -u
+            npm install
+          fi
+
+      - name: Open the bump PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ inputs.dependency-bump-branch }}
+          commit-message: 'chore(deps): scheduled dependency bump'
+          title: 'chore(deps): scheduled dependency bump'
+          body: >
+            Automated dependency bump from the `scheduled-ops` workflow. CI on this
+            PR is the verification — merge once it is green.
+          labels: type:task,source:agent
+
+  stale-check:
+    name: Stale issues and PRs
+    if: inputs.run-stale-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-stale: ${{ inputs.stale-days }}
+          days-before-close: ${{ inputs.stale-close-days }}
+          stale-issue-label: status:waiting
+          stale-pr-label: status:waiting
+          stale-issue-message: >
+            No activity in ${{ inputs.stale-days }} days — marking stale. Closes in
+            ${{ inputs.stale-close-days }} more days without activity.
+          stale-pr-message: >
+            No activity in ${{ inputs.stale-days }} days — marking stale. Closes in
+            ${{ inputs.stale-close-days }} more days without activity.
+          exempt-issue-labels: status:blocked,launch-blocker
+          exempt-pr-labels: launch-blocker
