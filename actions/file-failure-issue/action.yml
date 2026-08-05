@@ -14,6 +14,13 @@ inputs:
     description: Comma-separated labels to apply.
     required: false
     default: 'type:bug,status:ready'
+  dedupe-label:
+    description: >
+      Label to scope the dedupe search on. Defaults to the first entry of
+      `labels`, so a caller that leads with a distinguishing label (e.g.
+      `ci-failure`) needs no extra input.
+    required: false
+    default: ''
   token:
     description: Token with issues:write.
     required: true
@@ -38,6 +45,7 @@ runs:
         TITLE: ${{ inputs.title }}
         BODY_FILE: ${{ inputs.body-file }}
         LABELS: ${{ inputs.labels }}
+        DEDUPE_LABEL: ${{ inputs.dedupe-label }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -47,9 +55,26 @@ runs:
           exit 1
         fi
 
-        existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-          --search "$TITLE in:title" --json number,title \
-          --jq "[.[] | select(.title == \"$TITLE\")] | first | .number // empty")
+        # The search index (`gh issue list --search`) lags real-time writes by
+        # minutes, so near-simultaneous failures (a deploy burst, a fan-out
+        # matrix) can each miss the other's issue and file a duplicate. List
+        # open issues by label via the REST endpoint instead — consistent
+        # reads, no staleness window — and paginate: a busy tracker can push
+        # an older open failure past the first page, and a missed match files
+        # a duplicate rather than failing loudly.
+        label="$DEDUPE_LABEL"
+        if [ -z "$label" ]; then
+          IFS=',' read -ra dedupe_names <<< "$LABELS"
+          label="${dedupe_names[0]}"
+        fi
+
+        existing=$(gh api "repos/$GITHUB_REPOSITORY/issues" \
+          -X GET \
+          -f state=open \
+          -f labels="$label" \
+          -f per_page=100 \
+          --paginate \
+          --jq '[.[] | select(.pull_request == null) | select(.title == env.TITLE)] | first | .number // empty')
 
         if [ -n "$existing" ]; then
           {
