@@ -21,10 +21,22 @@ name: Cut a release branch
 # Called as:
 #
 #   cut:
+#     permissions:
+#       contents: write
+#       pull-requests: read
+#       issues: write
 #     uses: GarrettMakesItLLC/ci/.github/workflows/release-cut.yml@v1
 #     with:
 #       sha: ${{ inputs.sha }}
 #     secrets: inherit
+#
+# The permissions block is not optional in practice. A called workflow's own
+# `permissions:` can only narrow what the run was granted, never widen it — so
+# a caller repo with a read-only default `GITHUB_TOKEN` (common) mints a
+# read-only token for the run unless the calling job grants these explicitly,
+# and this workflow's `contents: write` / `issues: write` then exceed it. That
+# fails the whole run at `startup_failure` with zero jobs and no logs, before
+# any step exists to explain why.
 
 on:
   workflow_call:

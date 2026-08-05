@@ -114,6 +114,10 @@ on:
 
 jobs:
   cut:
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: write
     uses: GarrettMakesItLLC/ci/.github/workflows/release-cut.yml@v1
     with:
       sha: ${{ inputs.sha }}
@@ -123,12 +127,14 @@ jobs:
 `secrets: inherit` passes the caller's own secrets (`RELEASE_PAT`, `GITHUB_TOKEN`) through — the
 reusable workflow never needs them named individually in the consumer.
 
-A called workflow's own `permissions:` block can only narrow what the run was granted, never widen
-it — so if a repo's default `GITHUB_TOKEN` permission is `read` (common), a caller that omits
-`permissions:` mints a read-only token for the run, and `issue-status-clear.yml`'s `issues: write`
-request then exceeds it. That fails the whole run at `startup_failure` with zero jobs, before any
-job output exists to explain why. The caller must grant the permission explicitly on the job that
-calls it:
+**The `permissions:` block on the calling job is not optional in practice, for either reusable
+workflow here.** A called workflow's own `permissions:` block can only narrow what the run was
+granted, never widen it — so if a repo's default `GITHUB_TOKEN` permission is `read` (common), a
+caller that omits `permissions:` mints a read-only token for the run, and `release-cut.yml`'s
+`contents: write` / `issues: write`, or `issue-status-clear.yml`'s `issues: write`, then exceed it.
+That fails the whole run at `startup_failure` with **zero jobs and no logs**, before any job output
+exists to explain why — this is the single most common way to misconfigure a consumer of either
+workflow. The caller must grant the permission explicitly on the job that calls it:
 
 ```yaml
 # .github/workflows/issue-status-clear.yml
