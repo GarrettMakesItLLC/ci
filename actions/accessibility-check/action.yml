@@ -1,0 +1,50 @@
+name: Accessibility check
+description: >
+  Run pa11y-ci against a URL the caller's app is already serving, and fail on
+  any reported issue. Tier 2 by nature — slow enough that most consumers gate
+  it on `merge_group` rather than every PR push (see `~/dotclaude/rules/ci.md`).
+
+# Composite, not a reusable workflow: even a Tier 2 job posts through the
+# caller's own `ci-success` needs: graph, which only works inside the caller's
+# job.
+
+inputs:
+  url:
+    description: URL to scan. The caller is responsible for the app already listening there.
+    required: true
+  config:
+    description: Path to a pa11y-ci config file. Empty uses pa11y-ci's defaults against `url`.
+    required: false
+    default: ''
+  package-manager:
+    description: npm or pnpm — used to invoke pa11y-ci if it is a project devDependency.
+    required: false
+    default: npm
+
+runs:
+  using: composite
+  steps:
+    - name: pa11y-ci
+      shell: bash
+      env:
+        URL: ${{ inputs.url }}
+        CONFIG: ${{ inputs.config }}
+        PM: ${{ inputs.package-manager }}
+      run: |
+        set -euo pipefail
+
+        run() {
+          if [ "$PM" = "pnpm" ]; then
+            pnpm exec pa11y-ci "$@"
+          elif [ -x node_modules/.bin/pa11y-ci ]; then
+            node_modules/.bin/pa11y-ci "$@"
+          else
+            npx --yes pa11y-ci "$@"
+          fi
+        }
+
+        if [ -n "$CONFIG" ]; then
+          run --config "$CONFIG"
+        else
+          run "$URL"
+        fi

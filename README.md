@@ -11,6 +11,7 @@ identical across them.
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
+| `actions/accessibility-check` | composite | `pa11y-ci` against a URL the caller is already serving. Tier 2. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
