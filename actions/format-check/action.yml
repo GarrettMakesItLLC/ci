@@ -1,0 +1,55 @@
+name: Format check
+description: >
+  Run the repo's formatter in check mode and fail on drift. Supports Prettier and
+  Biome; picks whichever the caller names.
+
+# Composite, not a reusable workflow, for the same reason as `ci-success`: this
+# gates a PR (Tier 1), and a reusable workflow's check name can never match a
+# bare required-context name. Runs inside the caller's own job.
+
+inputs:
+  formatter:
+    description: prettier or biome.
+    required: false
+    default: prettier
+  package-manager:
+    description: npm or pnpm — used to invoke the formatter's binary.
+    required: false
+    default: npm
+  paths:
+    description: Space-separated paths to check. Defaults to the whole tree.
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Check formatting
+      shell: bash
+      env:
+        FORMATTER: ${{ inputs.formatter }}
+        PM: ${{ inputs.package-manager }}
+        PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+
+        run() {
+          if [ "$PM" = "pnpm" ]; then
+            pnpm exec "$@"
+          else
+            npx --no-install "$@"
+          fi
+        }
+
+        case "$FORMATTER" in
+          prettier)
+            run prettier --check $PATHS
+            ;;
+          biome)
+            run biome format $PATHS
+            ;;
+          *)
+            echo "::error title=Unsupported formatter::'$FORMATTER' — use prettier or biome."
+            exit 1
+            ;;
+        esac
