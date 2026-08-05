@@ -12,6 +12,7 @@ identical across them.
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
+| `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 
 ## Why almost everything here is a composite action
 
@@ -22,8 +23,9 @@ and pointing a ruleset at the compound name would couple it to the caller's job 
 opposite of portable.
 
 A composite action runs inside a job the caller declares and names, so the check name stays the
-caller's to control. `issue-status-clear` is the one reusable workflow left, because it is triggered by
-an `issues` event rather than gating a PR — nothing requires its name.
+caller's to control. `issue-status-clear` and `release-cut` are reusable workflows anyway, because
+neither gates a PR — one is triggered by an `issues` event, the other by `workflow_dispatch` — so
+nothing requires either's check name to stay stable.
 
 ## Consuming it
 
@@ -58,6 +60,34 @@ jobs:
 The caller passes its own `needs` context because an action cannot read the caller's job graph.
 `ci-success` then reports on exactly what that repo declared, so this repo never needs to know any
 consumer's job names.
+
+### Consuming a reusable workflow
+
+`release-cut.yml` and `issue-status-clear.yml` are `workflow_call` workflows, not composite actions —
+a consumer needs its own thin trigger file that calls them:
+
+```yaml
+# .github/workflows/release-cut.yml
+name: Cut a release branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'dev commit to cut from (default: dev HEAD)'
+        required: false
+        type: string
+
+jobs:
+  cut:
+    uses: GarrettMakesItLLC/ci/.github/workflows/release-cut.yml@v1
+    with:
+      sha: ${{ inputs.sha }}
+    secrets: inherit
+```
+
+`secrets: inherit` passes the caller's own secrets (`RELEASE_PAT`, `GITHUB_TOKEN`) through — the
+reusable workflow never needs them named individually in the consumer.
 
 ### Repos running a merge queue: one check, both events
 
