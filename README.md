@@ -7,7 +7,7 @@ identical across them.
 
 | Path | Kind | Use |
 | --- | --- | --- |
-| `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. |
+| `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. Extra cache paths and a pre-install hook are configurable. |
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
@@ -60,6 +60,32 @@ jobs:
 The caller passes its own `needs` context because an action cannot read the caller's job graph.
 `ci-success` then reports on exactly what that repo declared, so this repo never needs to know any
 consumer's job names.
+
+### `setup-node-workspace` extras
+
+`pre-install-run` interposes a step between `setup-node` and the install — for anything that has
+to run after Node is installed but before the lockfile is read, such as pinning npm via Corepack:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@v1
+  with:
+    node-version: '24'
+    package-manager: npm
+    pre-install-run: corepack enable npm
+```
+
+`cache-path-extra` appends to the cached path list, for a generated artefact that lives outside
+`node_modules` (a Prisma client emitted to `prisma/generated/`, say) and should expire with the
+same dependency cache:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@v1
+  with:
+    cache-path-extra: prisma/generated
+    cache-key-extra: ${{ hashFiles('prisma/schema.prisma') }}
+```
+
+Both are optional and empty by default — existing callers are unaffected.
 
 ### Consuming a reusable workflow
 
