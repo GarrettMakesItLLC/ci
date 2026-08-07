@@ -1,0 +1,48 @@
+name: Build
+description: >
+  Run the repo's build script and fail on a non-zero exit. Thin by design — the
+  build command itself, and what "built" means, stays entirely with the caller.
+
+# Composite, not a reusable workflow: this gates a PR (Tier 1), and a reusable
+# workflow's check name can never match a bare required-context name.
+
+inputs:
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  script:
+    description: package.json script to run.
+    required: false
+    default: build
+  workspace:
+    description: >
+      Restrict the build to one workspace package (npm/pnpm `-w`/`--filter`
+      syntax). Empty runs the root script across the whole tree.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        SCRIPT: ${{ inputs.script }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          if [ -n "$WORKSPACE" ]; then
+            pnpm --filter "$WORKSPACE" run "$SCRIPT"
+          else
+            pnpm run "$SCRIPT"
+          fi
+        else
+          if [ -n "$WORKSPACE" ]; then
+            npm run "$SCRIPT" -w "$WORKSPACE"
+          else
+            npm run "$SCRIPT"
+          fi
+        fi
