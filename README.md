@@ -185,17 +185,19 @@ reports `success`, needing no allowance. Either way, never drop a job from `need
 — that reintroduces the "green over nothing" gap `allow-skipped` exists to name explicitly instead of
 silently.
 
-### Private-repo access
+### Consuming from a private repo
 
-Every repo here is private, and a private repo's actions are **not** callable from another repo by
-default. Each consumer needs Actions access granted: *Settings → Actions → General → Access →
-Accessible from repositories in the organization*. Without it every `uses:` resolves to a 404 that
+This repo is public, so any consumer can call its actions and reusable workflows with no extra
+setup. A **private** consumer still works the same way — a private repo can call a public repo's
+actions by default. The access grant (*Settings → Actions → General → Access → Accessible from
+repositories in the organization*) is only needed the other direction: if this repo, or another
+action it calls, were ever private. Without it in that case, every `uses:` resolves to a 404 that
 reads like a typo.
 
 ## What deliberately stays per repo
 
-The job graph. What varies most between these repos is exactly what CI *does* — MuscleBuddy has
-Android, e2e, a11y and Prisma migration lanes; NetWorthy has none of them yet; AdventureOS is pnpm on
+The job graph. What varies most between these repos is exactly what CI *does* — one product repo has
+Android, e2e, a11y and Prisma migration lanes; another has none of them yet; a third is pnpm on
 Next. A workflow abstract enough to cover all of that would be configured, not shared.
 
 So each repo keeps its own `ci.yml` and composes these pieces. What lives here is only what is
