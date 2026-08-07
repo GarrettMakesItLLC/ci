@@ -11,6 +11,7 @@ identical across them.
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
+| `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 
