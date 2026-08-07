@@ -1,0 +1,58 @@
+name: Security scan
+description: >
+  Dependency audit (`npm audit` / `pnpm audit`) at a configurable severity
+  floor, plus a CodeQL-style SAST pass via `github/codeql-action`. Either half
+  can be switched off for a repo not ready for both yet.
+
+# Composite, not a reusable workflow: this gates a PR (Tier 1 or 2 depending on
+# how slow CodeQL runs for a given repo), and a reusable workflow's check name
+# can never match a bare required-context name.
+
+inputs:
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  audit-level:
+    description: Minimum severity that fails the dependency audit (low/moderate/high/critical).
+    required: false
+    default: high
+  run-dependency-audit:
+    description: Set false to skip the dependency audit half.
+    required: false
+    default: 'true'
+  run-codeql:
+    description: Set false to skip the CodeQL SAST half.
+    required: false
+    default: 'true'
+  codeql-languages:
+    description: Comma-separated CodeQL language identifiers (e.g. javascript-typescript).
+    required: false
+    default: javascript-typescript
+
+runs:
+  using: composite
+  steps:
+    - name: Dependency audit
+      shell: bash
+      if: inputs.run-dependency-audit == 'true'
+      env:
+        PM: ${{ inputs.package-manager }}
+        LEVEL: ${{ inputs.audit-level }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          pnpm audit --audit-level "$LEVEL"
+        else
+          npm audit --audit-level "$LEVEL"
+        fi
+
+    - name: Initialize CodeQL
+      if: inputs.run-codeql == 'true'
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ inputs.codeql-languages }}
+
+    - name: CodeQL analysis
+      if: inputs.run-codeql == 'true'
+      uses: github/codeql-action/analyze@v3
