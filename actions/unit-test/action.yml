@@ -1,0 +1,71 @@
+name: Unit test
+description: >
+  Run the repo's unit-test script with coverage, and optionally enforce a
+  minimum coverage percentage. Vitest and Jest both write coverage-summary.json
+  in the same shape when run with `--coverage`, so this reads that rather than
+  parsing a runner-specific report.
+
+# Composite, not a reusable workflow: this gates a PR (Tier 1), and a reusable
+# workflow's check name can never match a bare required-context name.
+
+inputs:
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  script:
+    description: package.json script to run. Must invoke the runner with coverage on.
+    required: false
+    default: test:coverage
+  coverage-summary:
+    description: >
+      Path to the coverage-summary.json the script produces. Empty skips the
+      threshold check entirely — the run still fails on a test failure either way.
+    required: false
+    default: coverage/coverage-summary.json
+  min-coverage:
+    description: Minimum total line-coverage percentage. Ignored if coverage-summary is empty.
+    required: false
+    default: '0'
+
+runs:
+  using: composite
+  steps:
+    - name: Run tests
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        SCRIPT: ${{ inputs.script }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          pnpm run "$SCRIPT"
+        else
+          npm run "$SCRIPT"
+        fi
+
+    - name: Enforce minimum coverage
+      shell: bash
+      if: inputs.coverage-summary != ''
+      env:
+        SUMMARY: ${{ inputs.coverage-summary }}
+        MIN: ${{ inputs.min-coverage }}
+      run: |
+        set -euo pipefail
+
+        if [ "$MIN" = "0" ]; then
+          echo "min-coverage is 0 — nothing to enforce."
+          exit 0
+        fi
+
+        if [ ! -f "$SUMMARY" ]; then
+          echo "::error title=No coverage report::Expected $SUMMARY — does the test script pass --coverage?"
+          exit 1
+        fi
+
+        pct=$(jq -r '.total.lines.pct' "$SUMMARY")
+        echo "Line coverage: ${pct}% (minimum ${MIN}%)"
+        if awk -v p="$pct" -v m="$MIN" 'BEGIN { exit !(p + 0 < m + 0) }'; then
+          echo "::error title=Coverage below threshold::${pct}% < ${MIN}%"
+          exit 1
+        fi
