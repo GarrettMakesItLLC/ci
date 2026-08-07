@@ -1,0 +1,40 @@
+name: Lint check
+description: >
+  Run the repo's linter and fail on any reported error. ESLint by default; any
+  `<package-manager> run <script>` linter works by overriding `script`.
+
+# Composite, not a reusable workflow: this gates a PR (Tier 1), and a reusable
+# workflow's check name can never match a bare required-context name.
+
+inputs:
+  package-manager:
+    description: npm or pnpm.
+    required: false
+    default: npm
+  script:
+    description: package.json script to run.
+    required: false
+    default: lint
+  max-warnings:
+    description: >
+      Warnings allowed before the run is treated as a failure. Passed through as
+      ESLINT_MAX_WARNINGS for scripts that read it; ignored otherwise.
+    required: false
+    default: '0'
+
+runs:
+  using: composite
+  steps:
+    - name: Lint
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        SCRIPT: ${{ inputs.script }}
+        ESLINT_MAX_WARNINGS: ${{ inputs.max-warnings }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          pnpm run "$SCRIPT"
+        else
+          npm run "$SCRIPT"
+        fi
