@@ -52,7 +52,17 @@ on:
 concurrency:
   # Queue, never cancel: this creates a branch, and a cancelled run can leave
   # one behind with nothing pointing at it.
-  group: release-cut
+  #
+  # Named DIFFERENTLY from every caller's own top-level `release-cut` group,
+  # deliberately: GitHub Actions scopes concurrency per run, not just per
+  # repo, so a called reusable workflow that reuses its caller's literal
+  # group name reserves that group a second time from inside the same run.
+  # With `cancel-in-progress: false` on both sides that's a run waiting on
+  # itself — GitHub fails it immediately with zero jobs (#36), not a
+  # `startup_failure` at parse time, so it looked identical to the
+  # already-fixed missing-permissions bug (#3906/#3907) until traced through
+  # `actions/runs/<id>/jobs` returning empty for a `failure` conclusion.
+  group: release-cut-run
   cancel-in-progress: false
 
 permissions:
