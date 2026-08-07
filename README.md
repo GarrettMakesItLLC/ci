@@ -20,6 +20,7 @@ identical across them.
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
+| `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
 
 ## Why almost everything here is a composite action
 
