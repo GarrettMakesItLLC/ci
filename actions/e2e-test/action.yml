@@ -21,6 +21,12 @@ inputs:
     description: Also install Playwright's OS-level dependencies (apt packages).
     required: false
     default: 'true'
+  browsers:
+    description: >
+      Space-separated browser projects to install (e.g. `chromium`). Empty
+      installs Playwright's full default set.
+    required: false
+    default: ''
   pre-run:
     description: >
       Shell command to run after Playwright browsers are ready but before the
@@ -57,24 +63,40 @@ runs:
       uses: actions/cache@v6
       with:
         path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-${{ inputs.browsers || 'all' }}
         restore-keys: |
+          playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-
           playwright-${{ runner.os }}-
 
+    # Browser binaries live in the cached ~/.cache/ms-playwright path, so this
+    # is skipped on a cache hit. The OS-level deps below are not — they live
+    # outside that path and never get restored with it.
     - name: Install Playwright browsers
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         PM: ${{ inputs.package-manager }}
-        DEPS: ${{ inputs.install-deps }}
+        BROWSERS: ${{ inputs.browsers }}
       run: |
         set -euo pipefail
-        flag=""
-        [ "$DEPS" = "true" ] && flag="--with-deps"
         if [ "$PM" = "pnpm" ]; then
-          pnpm exec playwright install $flag
+          pnpm exec playwright install $BROWSERS
         else
-          npx playwright install $flag
+          npx playwright install $BROWSERS
+        fi
+
+    - name: Install Playwright OS dependencies
+      if: inputs.install-deps == 'true'
+      shell: bash
+      env:
+        PM: ${{ inputs.package-manager }}
+        BROWSERS: ${{ inputs.browsers }}
+      run: |
+        set -euo pipefail
+        if [ "$PM" = "pnpm" ]; then
+          pnpm exec playwright install-deps $BROWSERS
+        else
+          npx playwright install-deps $BROWSERS
         fi
 
     - name: Pre-run
