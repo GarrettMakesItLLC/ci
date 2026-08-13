@@ -21,6 +21,12 @@ inputs:
     description: Also install Playwright's OS-level dependencies (apt packages).
     required: false
     default: 'true'
+  pre-run:
+    description: >
+      Shell command to run after Playwright browsers are ready but before the
+      e2e script — for a build step the e2e script needs (e.g. `npm run build`).
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -52,6 +58,8 @@ runs:
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}
+        restore-keys: |
+          playwright-${{ runner.os }}-
 
     - name: Install Playwright browsers
       if: steps.cache.outputs.cache-hit != 'true'
@@ -68,6 +76,11 @@ runs:
         else
           npx playwright install $flag
         fi
+
+    - name: Pre-run
+      if: inputs.pre-run != ''
+      shell: bash
+      run: ${{ inputs.pre-run }}
 
     - name: Run e2e tests
       shell: bash
