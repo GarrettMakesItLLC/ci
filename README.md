@@ -127,6 +127,15 @@ jobs:
 `secrets: inherit` passes the caller's own secrets (`RELEASE_PAT`, `GITHUB_TOKEN`) through — the
 reusable workflow never needs them named individually in the consumer.
 
+**A promotion PR carrying no checks at all is the failure this workflow guards hardest against**,
+because it reads as a green light rather than a red one. Two things produce it: a PR opened with
+`GITHUB_TOKEN` (hence `RELEASE_PAT`), and a PR that conflicts with `main` — GitHub builds no
+`refs/pull/N/merge` ref for one, so `pull_request` workflows have nothing to check out and never
+start. So the cut refuses to run when this cycle's promotion PR was closed without merging, which is
+what lets `main` drift far enough to conflict, and fails after opening the PR if that PR already
+conflicts. Pass `allow-unmerged-promotions: true` to cut anyway, accepting that the abandoned
+promotion's commits never shipped.
+
 **The `permissions:` block on the calling job is not optional in practice, for either reusable
 workflow here.** A called workflow's own `permissions:` block can only narrow what the run was
 granted, never widen it — so if a repo's default `GITHUB_TOKEN` permission is `read` (common), a

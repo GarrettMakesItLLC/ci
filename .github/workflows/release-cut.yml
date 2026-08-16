@@ -18,6 +18,15 @@ name: Cut a release branch
 # fresh clone gets. Merging is never automated: CI is the gate and a human
 # decides to promote.
 #
+# The token is not the only way a promotion ends up with no checks. GitHub
+# builds no `refs/pull/N/merge` ref for a PR that conflicts with its base, and
+# a `pull_request` workflow with nothing to check out never starts — so a
+# conflicted promotion also carries zero checks rather than a red one. Both
+# guards below exist for that: the cut refuses to run when the last cycle's
+# promotion was closed unmerged (the usual reason `main` drifts far enough to
+# conflict at all), and it fails after opening the PR if that PR is already
+# conflicting.
+#
 # Called as:
 #
 #   cut:
@@ -45,6 +54,11 @@ on:
         description: 'dev commit to cut from (default: dev HEAD)'
         required: false
         type: string
+      allow-unmerged-promotions:
+        description: Cut even though this cycle's promotion PR was closed without merging.
+        required: false
+        type: boolean
+        default: false
     secrets:
       RELEASE_PAT:
         required: false
@@ -105,6 +119,53 @@ jobs:
             exit 1
           fi
           echo "OK: no open promotion PR."
+
+      - name: Refuse to cut while this cycle's promotion was closed unmerged
+        # A promotion PR closed without merging leaves `main` a full cut behind
+        # with nothing red anywhere: staleness fails no check on its own, and
+        # only surfaces a cycle or two later as a merge conflict on some later
+        # promotion — which in turn costs that promotion its own CI, since
+        # GitHub builds no merge ref for a conflicted PR and a `pull_request`
+        # workflow with nothing to check out never starts.
+        #
+        # Scoped twice, because "a promotion was once abandoned" is true
+        # forever and would wedge every future cut:
+        #
+        #   - Only promotions closed since the last one that MERGED. A merged
+        #     promotion is the cycle boundary; whatever was abandoned before it
+        #     is somebody's settled decision, not this cut's problem.
+        #   - Only a head that is not already an ancestor of `main`. Promotions
+        #     carry `dev` wholesale, so a superseded cut's commits usually ship
+        #     in the next one anyway.
+        if: ${{ !inputs.allow-unmerged-promotions }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          # ISO-8601 UTC sorts lexicographically, so a string compare is a
+          # date compare. Empty when nothing ever merged, which compares
+          # smaller than any timestamp and so scopes to everything.
+          since=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state merged \
+            --limit 1 --json mergedAt --jq '.[0].mergedAt // ""')
+          gh pr list --repo "$GITHUB_REPOSITORY" --base main --state closed \
+            --limit 30 --json number,headRefName,headRefOid,mergedAt,closedAt \
+            --jq '.[] | select(.mergedAt == null) | "\(.closedAt) \(.number) \(.headRefOid) \(.headRefName)"' \
+            > /tmp/closed-promotions.txt
+          unshipped=''
+          while read -r closed_at number sha branch; do
+            [ -n "${number:-}" ] || continue
+            [ "$closed_at" \> "$since" ] || continue
+            # A head SHA git does not have is unknowable, not grounds to block.
+            git cat-file -e "$sha^{commit}" 2>/dev/null || continue
+            git merge-base --is-ancestor "$sha" origin/main && continue
+            unshipped="$unshipped #$number ($branch)"
+          done < /tmp/closed-promotions.txt
+          if [ -n "$unshipped" ]; then
+            echo "::error title=A promotion was closed without merging::$unshipped never reached main, so main is a full cut stale. Promote those commits, or re-run with allow-unmerged-promotions to accept the loss."
+            exit 1
+          fi
+          echo "OK: no unmerged promotion since the last one that shipped."
 
       - name: Resolve the commit to cut from
         id: point
@@ -196,40 +257,109 @@ jobs:
           echo "url=$url" >>"$GITHUB_OUTPUT"
           echo "Opened $url"
 
+      # A conflicted promotion PR is not merely inconvenient — GitHub cannot
+      # build its `refs/pull/N/merge` ref, and a `pull_request` workflow with
+      # nothing to check out never starts. The PR then carries NO checks at
+      # all rather than a red one, which reads as a green light. Catching it
+      # here turns that silence into a failed run.
+      #
+      # Mergeability is computed asynchronously, so `mergeable` is null for the
+      # first second or two after the PR opens; poll rather than trust the
+      # first answer.
+      - name: Make sure the promotion PR is actually mergeable
+        id: mergeable
+        if: steps.pr.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          set -euo pipefail
+          state=''
+          for _ in $(seq 1 20); do
+            state=$(gh pr view "$PR_URL" --json mergeable --jq '.mergeable')
+            [ "$state" = 'UNKNOWN' ] || break
+            sleep 5
+          done
+          case "$state" in
+            CONFLICTING)
+              echo "::error title=Promotion PR conflicts with main::$PR_URL cannot be merged as-is, so GitHub builds no merge ref and its CI will never start. Merge origin/main into the release branch to resolve it."
+              exit 1
+              ;;
+            MERGEABLE)
+              echo "OK: $PR_URL merges cleanly."
+              ;;
+            *)
+              echo "::warning title=Mergeability still unknown::GitHub had not finished computing whether $PR_URL merges cleanly. Check it by hand."
+              ;;
+          esac
+
       # A cut that produced a branch nobody promotes is the failure mode worth
       # catching: the branch sits, `dev` keeps moving, and the next cut refuses
       # because a promotion is already open.
       - name: Compose the cut-failure body
-        if: failure() && steps.pr.outcome == 'failure'
+        id: failure_body
+        if: failure() && (steps.pr.outcome == 'failure' || steps.mergeable.outcome == 'failure')
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PR_FAILED: ${{ steps.pr.outcome == 'failure' }}
         run: |
-          cat >/tmp/cut-failure.md <<EOF
-          \`release-cut.yml\` cut \`${{ steps.branch.outputs.name }}\` but could not open
-          its promotion PR, so the branch exists with nothing pointing at it.
+          set -euo pipefail
+          if [ "$PR_FAILED" = 'true' ]; then
+            echo 'title=Release cut could not open its promotion PR' >>"$GITHUB_OUTPUT"
+            cat >/tmp/cut-failure.md <<EOF
+          \`release-cut.yml\` cut \`$BRANCH\` but could not open its promotion PR, so
+          the branch exists with nothing pointing at it.
 
-          - **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - **Branch:** \`${{ steps.branch.outputs.name }}\`
+          - **Run:** $RUN_URL
+          - **Branch:** \`$BRANCH\`
 
           Most likely \`RELEASE_PAT\` expired or was revoked. Open the PR by hand to
           unblock the promotion:
 
           \`\`\`bash
-          gh pr create --base main --head ${{ steps.branch.outputs.name }} \\
+          gh pr create --base main --head $BRANCH \\
             --title 'chore(release): promote dev to production'
           \`\`\`
 
           Leaving the branch un-promoted also blocks the *next* cut, which refuses
           to run while a promotion is open.
           EOF
+          else
+            echo 'title=Promotion PR conflicts with main' >>"$GITHUB_OUTPUT"
+            cat >/tmp/cut-failure.md <<EOF
+          \`release-cut.yml\` opened $PR_URL, but it conflicts with \`main\`. GitHub
+          builds no merge ref for a conflicted PR, so its \`pull_request\` CI —
+          including the e2e batch gate — never starts, and the PR looks unchecked
+          rather than red.
+
+          - **Run:** $RUN_URL
+          - **Branch:** \`$BRANCH\`
+
+          A promotion conflicting with \`main\` usually means \`main\` carries something
+          \`dev\` does not, or an earlier promotion never landed. Resolve it on the
+          release branch:
+
+          \`\`\`bash
+          git checkout $BRANCH
+          git merge origin/main
+          git push
+          \`\`\`
+
+          The push retriggers CI, since the merge ref becomes buildable again.
+          EOF
+          fi
 
       # `ci-failure` is load-bearing, not decoration: repos with a
       # close-failure-issue.sh match open issues carrying it, by exact title,
       # to close this one once a cut succeeds. Drop the label and the issue is
       # never closed.
-      - name: File an issue if the PR could not be opened
-        if: failure() && steps.pr.outcome == 'failure'
+      - name: File an issue if the cut could not hand off a gated PR
+        if: failure() && (steps.pr.outcome == 'failure' || steps.mergeable.outcome == 'failure')
         uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
         with:
-          title: Release cut could not open its promotion PR
+          title: ${{ steps.failure_body.outputs.title }}
           body-file: /tmp/cut-failure.md
           labels: ci-failure,area:platform,type:bug,status:ready,source:agent
           token: ${{ secrets.GITHUB_TOKEN }}
