@@ -85,6 +85,9 @@ runs:
           npx playwright install $BROWSERS
         fi
 
+    # apt-get against a stalled mirror can hang past the job's own timeout with
+    # no signal why (#47) — a per-attempt timeout turns that into a fast, clearly
+    # labeled failure, and a retry absorbs the transient mirror flake outright.
     - name: Install Playwright OS dependencies
       if: inputs.install-deps == 'true'
       shell: bash
@@ -92,12 +95,24 @@ runs:
         PM: ${{ inputs.package-manager }}
         BROWSERS: ${{ inputs.browsers }}
       run: |
-        set -euo pipefail
-        if [ "$PM" = "pnpm" ]; then
-          pnpm exec playwright install-deps $BROWSERS
-        else
-          npx playwright install-deps $BROWSERS
-        fi
+        set -uo pipefail
+        install() {
+          if [ "$PM" = "pnpm" ]; then
+            pnpm exec playwright install-deps $BROWSERS
+          else
+            npx playwright install-deps $BROWSERS
+          fi
+        }
+        attempt=1
+        until timeout 300 bash -c "$(declare -f install); install"; do
+          if [ "$attempt" -ge 3 ]; then
+            echo "::error title=Playwright install-deps failed::timed out or failed after $attempt attempts (5m each)"
+            exit 1
+          fi
+          echo "::warning title=Playwright install-deps attempt $attempt failed or timed out::retrying"
+          attempt=$((attempt + 1))
+          sleep $((attempt * 10))
+        done
 
     - name: Pre-run
       if: inputs.pre-run != ''

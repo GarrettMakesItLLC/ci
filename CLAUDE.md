@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-**Autonomy: gated.** Carry work to a PR ready to merge, then stop.
+**Autonomy: autonomous-merge.** Merge to `main` on green CI. The high blast radius below is a
+reason for care in *how* a change is validated, not a reason to gate the merge behind a human —
+the validate-against-a-consumer step still applies before moving a `v1`/`v2` tag.
 
 Shared GitHub Actions for every `GarrettMakesItLLC` repo. `README.md` is the consumer-facing
 contract — read it before changing anything here, because it is what other repos were written
