@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-**Autonomy: gated.** Carry work to a PR ready to merge, then stop.
+**Autonomy: autonomous-merge**, same discipline as every other repo — reviewed, CI green, merge it.
+CI here is `actionlint` plus a real consumer's workflow run, so treat both as the gate: never merge
+on red or pending checks. Because a change here lands in every consumer at once with no PR to catch
+it there, hold the bar higher before calling something reviewed — see below.
 
 Shared GitHub Actions for every `GarrettMakesItLLC` repo. `README.md` is the consumer-facing
 contract — read it before changing anything here, because it is what other repos were written

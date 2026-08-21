@@ -21,6 +21,15 @@ inputs:
       `ci-failure`) needs no extra input.
     required: false
     default: ''
+  dedupe-key:
+    description: >
+      Stable identity for what's failing — a lane or workflow name — used to
+      find the issue to reuse. Defaults to `title`, but a caller whose title
+      names the symptom (e.g. "is failing" vs. "has gone quiet" for the same
+      lane) should pass its own stable key here so both symptoms land on one
+      issue instead of each filing its own.
+    required: false
+    default: ''
   token:
     description: Token with issues:write.
     required: true
@@ -46,6 +55,7 @@ runs:
         BODY_FILE: ${{ inputs.body-file }}
         LABELS: ${{ inputs.labels }}
         DEDUPE_LABEL: ${{ inputs.dedupe-label }}
+        DEDUPE_KEY_INPUT: ${{ inputs.dedupe-key }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -54,6 +64,17 @@ runs:
           echo "::error title=Missing body file::$BODY_FILE does not exist."
           exit 1
         fi
+
+        # The dedup identity is the lane/workflow, not the exact title: a
+        # caller whose title names the symptom ("is failing" vs. "has gone
+        # quiet") would otherwise never match its own other symptom, and each
+        # would file its own issue for the same lane. Callers that don't pass
+        # their own key fall back to title, unchanged from before.
+        dedupe_key="$DEDUPE_KEY_INPUT"
+        if [ -z "$dedupe_key" ]; then
+          dedupe_key="$TITLE"
+        fi
+        marker="<!-- file-failure-issue:key=$dedupe_key -->"
 
         # The search index (`gh issue list --search`) lags real-time writes by
         # minutes, so near-simultaneous failures (a deploy burst, a fan-out
@@ -68,13 +89,13 @@ runs:
           label="${dedupe_names[0]}"
         fi
 
-        existing=$(gh api "repos/$GITHUB_REPOSITORY/issues" \
+        existing=$(MARKER="$marker" gh api "repos/$GITHUB_REPOSITORY/issues" \
           -X GET \
           -f state=open \
           -f labels="$label" \
           -f per_page=100 \
           --paginate \
-          --jq '[.[] | select(.pull_request == null) | select(.title == env.TITLE)] | first | .number // empty')
+          --jq '[.[] | select(.pull_request == null) | select(.body != null) | select(.body | contains(env.MARKER))] | first | .number // empty')
 
         if [ -n "$existing" ]; then
           {
@@ -93,8 +114,14 @@ runs:
           [ -n "$name" ] && args+=(--label "$name")
         done
 
+        body_with_marker=$(mktemp)
+        {
+          echo "$marker"
+          cat "$BODY_FILE"
+        } > "$body_with_marker"
+
         url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
-          --title "$TITLE" --body-file "$BODY_FILE" "${args[@]}")
+          --title "$TITLE" --body-file "$body_with_marker" "${args[@]}")
         number="${url##*/}"
         echo "number=$number" >> "$GITHUB_OUTPUT"
         echo "::notice title=Filed issue::$url"
