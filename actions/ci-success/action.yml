@@ -1,7 +1,9 @@
 name: Verify required jobs
 description: >
   Fail when any job the caller depended on failed, was cancelled, or was skipped.
-  The aggregate every branch ruleset requires.
+  The aggregate every branch ruleset requires. A cancelled job is reported
+  distinctly from a failed one — it is infrastructure, not evidence about the
+  diff.
 
 # A composite action, deliberately not a reusable workflow. A job that calls a
 # reusable workflow with `uses:` produces a check named
@@ -45,6 +47,7 @@ runs:
 
         allowed=",${ALLOW_SKIPPED// /},"
         failed=0
+        cancelled=""
 
         while IFS=$'\t' read -r job result; do
           [ -z "$job" ] && continue
@@ -58,11 +61,29 @@ runs:
                 echo "::error title=Required job skipped::$job was skipped but had work to do."
                 failed=1
               fi ;;
+            cancelled)
+              # Distinct from a failure on purpose. A cancelled job ran no test
+              # and recorded no step, so it says nothing about the diff — it is
+              # infrastructure: a `concurrency:` group evicting a queued run, a
+              # `timeout-minutes` expiring, a superseding push, or somebody
+              # pressing cancel. Reported as a failure with no distinguishing
+              # label, it sends the reader hunting for a test that never ran.
+              echo "::error title=Required job cancelled (infrastructure, not a test failure)::$job was cancelled before it finished. Nothing is known about this change from it — re-run the job. Check for a concurrency group, an expired timeout, or a superseding push; the job's own log will be empty if it never started."
+              cancelled="$cancelled $job"
+              failed=1 ;;
             *)
               echo "::error title=Required job $result::$job reported '$result'."
               failed=1 ;;
           esac
         done < <(jq -r 'to_entries[] | "\(.key)\t\(.value.result)"' <<<"$NEEDS")
+
+        if [ -n "$cancelled" ]; then
+          {
+            echo "### Cancelled jobs (not test failures)"
+            echo
+            for job in $cancelled; do echo "- \`$job\` — cancelled before it finished; re-run it."; done
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
 
         [ "$failed" -ne 0 ] && exit 1
         echo "All required jobs succeeded."
