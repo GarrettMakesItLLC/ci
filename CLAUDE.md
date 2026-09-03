@@ -14,6 +14,12 @@ staging tier for a shared action. That asymmetry drives every rule below.
 - Consumers pin `@v1`. Never tell one to use `@main`.
 - A backward-compatible change moves the `v1` tag. A breaking change cuts `v2` and consumers migrate
   deliberately — never repoint `v1` at incompatible behaviour.
+- **`v1` moves on merge, not by hand.** `release.yml` waits for the self-check on the merged commit
+  and then repoints the tag; a change meant for `v2` opts out with `[no-release]` in its merge
+  commit. The `v1 covers main` job in `self-check.yml` fails whenever the tag is behind
+  `.github/workflows/` or `actions/`, so an unreleased fix is red rather than invisible. It has been
+  invisible before: the fix for MuscleBuddy#3946/#3947 sat untagged while two closed issues said it
+  had shipped and the consumer went on running the pre-fix revision (MuscleBuddy#5764).
 - Adding a required input is breaking. Adding an optional input with a default is not.
 - **Prefer a composite action over a reusable workflow for anything a ruleset requires.** A job
   calling a reusable workflow emits a check named `<caller-job> / <callee-job>`, which cannot match the
@@ -40,9 +46,10 @@ There is no test suite; the consumers are the tests. Before moving `v1`:
 actionlint                              # not installed on this machine — CI runs it
 ```
 
-Validate against a real consumer by pointing one repo's workflow at the commit SHA in a PR, letting
-its CI run, then moving the tag once it is green. A tag moved on an unproven commit breaks four repos
-simultaneously.
+Validate against a real consumer by pointing one repo's workflow at the commit SHA in a PR and
+letting its CI run. A tag moved on an unproven commit breaks four repos simultaneously, so that
+validation belongs **before the merge** — merging is what releases now, and there is no gap
+afterwards in which to have second thoughts.
 
 ## Scope
 

@@ -10,6 +10,10 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # The `v1-current` job below is only useful if something asks it. A merge that
+  # never released leaves no event behind, so a daily run is what turns it up.
+  schedule:
+    - cron: '23 7 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -76,6 +80,40 @@ jobs:
             exit 1
           fi
           echo "ok"
+
+  # Consumers pin `@v1`, so a change merged to `main` and never tagged reaches
+  # nobody while every sign in the tracker says it shipped. `release.yml` moves
+  # the tag automatically; this is the backstop that makes a skipped or failed
+  # release visible instead of silent.
+  #
+  # It runs on `push: main` and on a schedule, never on a PR — on a PR the tag
+  # is *supposed* to be behind, because the change has not merged yet.
+  v1-current:
+    name: v1 covers main
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: v1 is not behind the shared surface
+        run: |
+          git fetch --quiet origin 'refs/tags/v1:refs/tags/v1' || {
+            echo "::error::no v1 tag — consumers pinning @v1 resolve nothing"
+            exit 1
+          }
+          # Only the surface a consumer actually runs counts. A README or
+          # CLAUDE.md edit reaches nobody downstream and must not redden this.
+          drift="$(git diff --name-only v1 origin/main -- .github/workflows actions)"
+          if [ -n "$drift" ]; then
+            echo "::error::v1 is behind main; these run in consumers only once the tag moves:"
+            printf '%s\n' "$drift"
+            echo "Run the Release workflow, or mark the change [no-release] if it is meant for v2."
+            exit 1
+          fi
+          echo "v1 covers every workflow and action on main."
 
   ci-success:
     name: CI Success
