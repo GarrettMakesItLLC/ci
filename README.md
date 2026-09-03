@@ -40,6 +40,10 @@ nothing requires either's check name to stay stable.
 **Pin a tag, never `@main`.** A push to `main` here would change CI in every repo at once, with no
 PR in those repos to catch it.
 
+`v1` tracks `main`: merging is what releases, and the `Release` workflow repoints the tag once the
+self-check on the merged commit is green. A change meant for a future major says `[no-release]` in
+its merge commit and leaves `v1` alone.
+
 ```yaml
 jobs:
   lint:

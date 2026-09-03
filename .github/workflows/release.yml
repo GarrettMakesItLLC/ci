@@ -1,0 +1,114 @@
+name: Release
+
+# Consumers pin `@v1`, so a merged change reaches nobody until that tag moves.
+# Moving it by hand is a step with no gate on it, and a step with no gate on it
+# is one somebody eventually forgets: the fix for MuscleBuddy#3946/#3947 sat on
+# `main` untagged for three days while two closed issues said it had shipped and
+# the consumer kept running the pre-fix revision (MuscleBuddy#5764).
+#
+# So the tag moves here, on every push to `main`, once the self-check on that
+# same commit is green. A change that must NOT move `v1` says so in its merge
+# commit with `[no-release]` — that is the breaking change that cuts `v2`, and
+# `v1` is meant to stay where it is.
+#
+# The `v1-current` job in `self-check.yml` is the backstop: it fails when the
+# tag is behind the shared surface, so a skipped or failed release is visible
+# rather than silent.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit to release. Defaults to the current `main` head.
+        type: string
+        required: false
+
+concurrency:
+  group: release-v1
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Move v1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag update needs real history, not the default depth-1 graft.
+          fetch-depth: 0
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Resolve the commit to release
+        id: target
+        env:
+          REQUESTED: ${{ inputs.sha }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Releasing $sha (requested: ${REQUESTED:-<main head>})"
+
+      # A breaking change repoints nothing: consumers migrate to `v2`
+      # deliberately. Opting out is explicit and recorded in the commit, so the
+      # reason survives in `git log` rather than in somebody's memory.
+      - name: Honour [no-release]
+        id: optout
+        run: |
+          msg="$(git log -1 --pretty=%B)"
+          if printf '%s' "$msg" | grep -qF '[no-release]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::commit carries [no-release]; leaving v1 where it is"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A tag moved onto a commit whose own lint never passed breaks every
+      # consumer at once, which is the failure this repo exists to avoid. Wait
+      # for the self-check on this exact SHA rather than assuming it ran.
+      - name: Require a green self-check on this commit
+        if: steps.optout.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          for attempt in $(seq 1 40); do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name == "Lint actions and workflows")] | if length == 0 then "pending" elif any(.status != "completed") then "pending" elif all(.conclusion == "success") then "success" else "failure" end')"
+            echo "attempt ${attempt}: ${state}"
+            case "$state" in
+              success) exit 0 ;;
+              failure) echo "::error::self-check failed on ${SHA}; not moving v1"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "::error::self-check on ${SHA} never completed; not moving v1"
+          exit 1
+
+      - name: Move v1
+        if: steps.optout.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          # A major-version tag is a moving pointer by design, so this is an
+          # update of an existing ref rather than a new one. `force` is what
+          # makes it a pointer instead of an immutable release tag.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/v1" \
+              -f sha="${SHA}" -F force=true >/dev/null
+            echo "moved v1 -> ${SHA}"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/tags/v1 -f sha="${SHA}" >/dev/null
+            echo "created v1 -> ${SHA}"
+          fi
+          {
+            echo "### v1 now points at \`${SHA}\`"
+            echo
+            echo "Every consumer pinning \`@v1\` picks this up on its next run."
+          } >> "$GITHUB_STEP_SUMMARY"
