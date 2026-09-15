@@ -1,0 +1,15 @@
+name: fixture — violations B
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Violation: major-version skew against workflow-a.yml's
+      # `actions/setup-node@v6` — same action, different major, both lines
+      # individually valid.
+      - uses: actions/setup-node@v5
+
+      # Not a violation: third-party action correctly SHA-pinned.
+      - uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528
