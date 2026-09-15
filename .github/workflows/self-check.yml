@@ -77,10 +77,45 @@ jobs:
           fi
           echo "ok"
 
+  check-action-pins-fixture:
+    name: check-action-pins fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # The fixture set carries one violation of each rule the action
+      # enforces (org @main, unpinned third-party tag, major-version skew)
+      # plus lines that must NOT trip it (a trusted owner on a tag, a
+      # correctly SHA-pinned third party, a local action reference). This
+      # step must fail — `continue-on-error` captures that as an outcome to
+      # assert on next, rather than failing the job here.
+      - name: Fixture with violations must fail
+        id: violations
+        continue-on-error: true
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/violations
+
+      - name: Assert the violating fixture failed
+        run: |
+          if [ "${{ steps.violations.outcome }}" != "failure" ]; then
+            echo "::error::check-action-pins passed a fixture with known violations — the check is not firing"
+            exit 1
+          fi
+          echo "ok — violating fixture correctly failed"
+
+      # The clean fixture has no violations and must pass outright — no
+      # continue-on-error, so a regression here fails the job directly.
+      - name: Fixture with no violations must pass
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/clean
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint]
+    needs: [lint, check-action-pins-fixture]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
