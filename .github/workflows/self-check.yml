@@ -112,10 +112,129 @@ jobs:
         with:
           workflow-dir: .github/fixtures/check-action-pins/clean
 
+  pr-body-lint-fixtures:
+    name: pr-body-lint catches its traps
+    # actions/pr-body-lint has no test suite of its own (this repo has none),
+    # so its fixture cases run here — the same reasoning as the composite-
+    # action structural checks above: nowhere downstream catches a regression
+    # before it reaches a consumer.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # MuscleBuddy #4929: "Does not close #4885 — the recapture itself is
+      # still owed" still closed #4885 on merge. GitHub's parser has no
+      # notion of negation, so this must be caught.
+      - name: Negated close must fail the check
+        id: negated
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Does not close #4885 — the recapture itself is still owed.'
+      - name: Assert negated-close fixture failed
+        if: steps.negated.outcome != 'failure'
+        run: |
+          echo "::error::negated-close fixture was expected to fail the check but outcome was '${{ steps.negated.outcome }}'"
+          exit 1
+
+      # MuscleBuddy #4597: "Closes #4879, #4885" only closed #4879 — the
+      # keyword has to be repeated per issue.
+      - name: Comma-list must fail the check
+        id: comma
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #4879, #4885'
+      - name: Assert comma-list fixture failed
+        if: steps.comma.outcome != 'failure'
+        run: |
+          echo "::error::comma-list fixture was expected to fail the check but outcome was '${{ steps.comma.outcome }}'"
+          exit 1
+
+      - name: Single closing reference must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12'
+
+      - name: Keyword repeated per issue must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12, Closes #34'
+
+  deploy-target-fixtures:
+    name: deploy-target fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Unit-level: deployDecision() directly, the fail-open paths and both
+      # donor shapes (ci#62). node is preinstalled on ubuntu-latest; this
+      # script has no dependencies.
+      - name: deployDecision fixture cases
+        run: node actions/deploy-target/deploy-target.fixtures.mjs
+
+      # Composite-action level: the three cases the issue asks for, run
+      # through the real `uses:` path so a drift between action.yml's env
+      # wiring and the script's env reads is caught here, not in a consumer.
+      - name: SHOULD deploy — dev branch, matching path
+        id: should_deploy
+        uses: ./actions/deploy-target
+        with:
+          git-ref: dev
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: apps/web/src/App.tsx
+
+      - name: assert SHOULD deploy
+        run: |
+          [ "${{ steps.should_deploy.outputs.build }}" = "true" ] || {
+            echo "::error::expected build=true, got '${{ steps.should_deploy.outputs.build }}' (${{ steps.should_deploy.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — wrong branch
+        id: wrong_branch
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+
+      - name: assert SHOULD NOT deploy (wrong branch)
+        run: |
+          [ "${{ steps.wrong_branch.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.wrong_branch.outputs.build }}' (${{ steps.wrong_branch.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — no matching path changed
+        id: no_matching_path
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: |
+            apps/server/index.ts
+            prisma/schema.prisma
+
+      - name: assert SHOULD NOT deploy (no matching path)
+        run: |
+          [ "${{ steps.no_matching_path.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.no_matching_path.outputs.build }}' (${{ steps.no_matching_path.outputs.reason }})"
+            exit 1
+          }
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, check-action-pins-fixture]
+    needs: [lint, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
