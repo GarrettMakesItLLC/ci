@@ -110,6 +110,69 @@ jobs:
           fi
           echo "fail fixture: OK (exit $fail_status, as expected)"
 
+  # Proves post-deploy-probe.yml's failure path actually fires, not just that
+  # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
+  # block, but says nothing about whether the probe logic itself detects a
+  # real failure — a status check inverted, an off-by-one in the retry loop,
+  # or a jq filter that silently no-ops all read the same as success to
+  # actionlint. Both fixtures run dry-run: true, so neither files or closes a
+  # real issue against this repo.
+  probe-fixture-good:
+    name: 'post-deploy-probe fixture: known-good'
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/post-deploy-probe.yml
+    with:
+      probes: |
+        [{"url": "https://raw.githubusercontent.com/github/gitignore/main/README.md", "expected_status": 200, "body_contains": "gitignore"}]
+      issue-title: 'post-deploy-probe self-check fixture (good) — never filed'
+      dry-run: true
+
+  probe-fixture-bad:
+    name: 'post-deploy-probe fixture: known-bad'
+    permissions:
+      contents: read
+      issues: write
+    # Expected to fail: the URL only ever answers 200, so asserting 599
+    # proves the status-mismatch path actually goes red rather than
+    # silently passing everything. `continue-on-error` is not a supported key
+    # on a job that calls a reusable workflow — GitHub then reads the whole
+    # job as an ordinary one missing `runs-on` and rejects `uses`/`with` as
+    # unexpected. Unneeded anyway: probe-fixture-check already runs `if:
+    # always()` and reads this job's `.result`, so a normal failure here
+    # doesn't block it.
+    uses: ./.github/workflows/post-deploy-probe.yml
+    with:
+      probes: |
+        [{"url": "https://raw.githubusercontent.com/github/gitignore/main/README.md", "expected_status": 599}]
+      issue-title: 'post-deploy-probe self-check fixture (bad) — never filed'
+      dry-run: true
+
+  probe-fixture-check:
+    name: post-deploy-probe gate fires on defect
+    needs: [probe-fixture-good, probe-fixture-bad]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Known-good passed and known-bad failed
+        env:
+          GOOD: ${{ needs.probe-fixture-good.result }}
+          BAD: ${{ needs.probe-fixture-bad.result }}
+        run: |
+          echo "known-good: $GOOD, known-bad: $BAD"
+          fail=0
+          if [ "$GOOD" != "success" ]; then
+            echo "::error::the known-good fixture should have passed but was $GOOD"
+            fail=1
+          fi
+          if [ "$BAD" != "failure" ]; then
+            echo "::error::the known-bad fixture should have failed but was $BAD — the probe's failure detection is not firing"
+            fail=1
+          fi
+          exit "$fail"
+
   file-failure-issue-fixture:
     name: file-failure-issue fixture (file/close lifecycle)
     runs-on: ubuntu-latest
@@ -280,7 +343,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, file-failure-issue-fixture, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
+    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
