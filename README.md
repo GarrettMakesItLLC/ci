@@ -11,7 +11,8 @@ identical across them.
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
-| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
+| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`). |
+| `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
@@ -19,9 +20,11 @@ identical across them.
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. |
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
+| `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 | `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
+| `.github/workflows/post-deploy-probe.yml` | reusable | Probe a URL set, assert status/headers/body, file an issue on failure. |
 
 ## Why almost everything here is a composite action
 
@@ -96,6 +99,64 @@ same dependency cache:
 
 Both are optional and empty by default — existing callers are unaffected.
 
+### `file-failure-issue`'s `close` mode
+
+`mode: close` is the other half of `mode: file` — same dedupe key, opposite direction. A synthetic
+monitor that reruns the same check on a schedule files on failure and closes on the next success,
+so the tracker never shows a stale "this is broken" once it isn't:
+
+```yaml
+- name: File an alert issue
+  if: steps.check.outcome == 'failure'
+  uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+  with:
+    title: 'URGENT: the scheduled check did not pass'
+    body-file: alert.md
+    labels: ci-failure,type:bug,status:ready
+    token: ${{ github.token }}
+
+- name: Close the alert issue once green again
+  if: steps.check.outcome == 'success'
+  uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+  with:
+    mode: close
+    title: 'URGENT: the scheduled check did not pass'
+    dedupe-label: ci-failure
+    token: ${{ github.token }}
+```
+
+`title` and the dedupe label (`dedupe-label`, or the first entry of `labels`) must match exactly
+between the two calls — that pair is the only thing tying a close back to the issue a prior run
+filed. `close` no-ops silently when nothing is open under that title, which is the common case: most
+runs are green and never filed anything.
+
+### `check-dependency-inventory` examples
+
+A monorepo with a markdown table (each dependency is the first column's `` `name` `` code span),
+scanning every package's manifest and treating its own scope as internal:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/dependencies.md
+    manifest-paths: packages/*/package.json
+    workspace-prefixes: '@gmi/,@garrettmakesitllc/'
+```
+
+A repo whose doc is prose rather than a strict table, scanning the root manifest plus two app
+manifests, with an allowlist for dependencies that have no external surface of their own:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/architecture/dependencies.md
+    manifest-paths: package.json,apps/server/package.json,apps/web/package.json,packages/*/package.json
+    dependency-fields: dependencies
+    workspace-prefixes: '@adventureos/'
+    allowlist: 'react,react-dom,zod'
+    match-mode: substring
+```
+
 ### Consuming a reusable workflow
 
 `release-cut.yml` and `issue-status-clear.yml` are `workflow_call` workflows, not composite actions —
@@ -160,6 +221,59 @@ jobs:
       issues: write
     uses: GarrettMakesItLLC/ci/.github/workflows/issue-status-clear.yml@v1
 ```
+
+### `post-deploy-probe.yml`: shared availability/header/body monitor
+
+Probes a URL set on a schedule or after a deploy, asserts status/header/body conditions per URL, and
+files (or reuses, or closes on recovery) an issue via `file-failure-issue`. It replaces the shape five
+products hand-wrote separately — it does not replace product-specific monitors that parse actual
+response content (a robots.txt policy, a Turnstile challenge, a SHA-served-commit check).
+
+```yaml
+# .github/workflows/post-deploy-probe.yml
+name: Post-deploy probe
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    permissions:
+      contents: read
+      issues: write
+    uses: GarrettMakesItLLC/ci/.github/workflows/post-deploy-probe.yml@v1
+    with:
+      probes: |
+        [
+          {"url": "https://example.com/health", "expected_status": 200},
+          {
+            "url": "https://example.com/",
+            "expected_status": 200,
+            "body_not_contains": "Authentication Required",
+            "expect_headers_present": ["strict-transport-security"],
+            "expect_headers_contain": {"content-security-policy": "script-src"}
+          }
+        ]
+      issue-title: Production availability probe failed
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Each `probes` entry: `url` (required), `method` (default `GET`), `expected_status` (default `200`),
+`headers` (request headers to send), `expect_headers_present` (response header names that must
+appear), `expect_headers_contain` (response header name -> substring its value must contain),
+`body_contains` / `body_not_contains` (a substring the response body must, or must not, contain — the
+latter is how NetWorthy's SSO-wall detection maps onto this). A failing entry retries
+`retries` times (default 3), `retry-delay-seconds` apart (default 10), to ride out a deploy's rollout
+window before counting as failed.
+
+Set `dry-run: true` to compute pass/fail without filing or closing a real issue — used by this repo's
+own `self-check.yml` to prove the failure path fires on a known-bad fixture without spamming an issue
+against `GarrettMakesItLLC/ci` on every PR.
 
 ### Repos running a merge queue: one check, both events
 

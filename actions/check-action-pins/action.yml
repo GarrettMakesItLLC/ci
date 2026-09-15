@@ -1,0 +1,50 @@
+name: Check action pins
+description: >
+  Fail when a `uses:` reference in a workflow tree is unsafe — a third-party
+  action on a mutable tag, an org-owned action tracking a branch, or the
+  same action pinned to two different major versions across the tree.
+
+inputs:
+  workflow-dir:
+    description: >
+      Directory of `.yml`/`.yaml` workflow files to check. Defaults to the
+      caller's own workflows; point it at a fixture directory to exercise
+      the check without touching the caller's real workflows.
+    required: false
+    default: .github/workflows
+  trusted-owners:
+    description: >
+      Comma-separated GitHub owners exempt from the SHA-pin requirement
+      (they may stay on a version tag, e.g. `actions/checkout@v7`). This
+      org (`GarrettMakesItLLC`) is never in this set implicitly — its own
+      branch-tracking rule is controlled separately by
+      `require-release-tag-for-org`.
+    required: false
+    default: 'actions,github'
+  require-release-tag-for-org:
+    description: >
+      Refuse `GarrettMakesItLLC/*@main` (or any other branch name) — an
+      org-owned action must pin a release tag or a commit SHA. Set to
+      `false` only for a repo deliberately testing against this org's
+      default branch.
+    required: false
+    default: 'true'
+  enforce-single-major:
+    description: >
+      Flag an action referenced at two different major versions across the
+      workflow tree (each line individually valid, the disagreement is the
+      bug).
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Check action pins
+      shell: bash
+      env:
+        WORKFLOW_DIR: ${{ inputs.workflow-dir }}
+        TRUSTED_OWNERS: ${{ inputs.trusted-owners }}
+        REQUIRE_RELEASE_TAG_FOR_ORG: ${{ inputs.require-release-tag-for-org }}
+        ENFORCE_SINGLE_MAJOR: ${{ inputs.enforce-single-major }}
+      run: node "${{ github.action_path }}/check-action-pins.mjs"
