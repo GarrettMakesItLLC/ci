@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-**Autonomy: gated.** Carry work to a PR ready to merge, then stop.
+**Autonomy: autonomous-merge.** Merge to `main` on green CI; CI is the gate. Consumers pin `@v1`, so move the tag after each merge (see README).
+
+A consumer only sees a change once the `v1` tag moves. `git tag -f v1 && git push -f origin v1` after every merge to `main` is part of finishing the work, not a release ritual to schedule.
 
 Shared GitHub Actions for every `GarrettMakesItLLC` repo. `README.md` is the consumer-facing
 contract — read it before changing anything here, because it is what other repos were written
