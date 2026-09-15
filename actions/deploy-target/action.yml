@@ -1,0 +1,97 @@
+name: Deploy target
+description: >-
+  Decide whether a push deploys — branch match plus an optional path match —
+  in one place. Replaces the deploy-target.mjs/vercel-ignore.mjs pairs
+  MuscleBuddy and RedThreadEvents each reimplemented and let drift (ci#62).
+inputs:
+  mode:
+    description: >-
+      'decide' (default) sets the `build`/`reason` outputs and always exits
+      0, for a workflow `if:`. 'vercel-ignore' instead exits with Vercel's
+      inverted Ignored-Build-Step contract (1 = build, 0 = skip) — only
+      meaningful when the vendored `deploy-target.mjs` is invoked directly
+      with `node` outside any Actions context (e.g. copied into a
+      `vercel.json` `ignoreCommand`), since a composite action cannot itself
+      run inside a Vercel build.
+    required: false
+    default: decide
+  vercel-env:
+    description: >-
+      Vercel's `VERCEL_ENV`. 'production' always builds. Leave unset outside
+      Vercel.
+    required: false
+    default: ''
+  git-ref:
+    description: Branch name being evaluated.
+    required: false
+    default: ${{ github.ref_name }}
+  always-build-refs:
+    description: >-
+      Comma-separated exact ref names that always build (staging surfaces
+      such as `dev`).
+    required: false
+    default: dev
+  always-build-ref-prefixes:
+    description: >-
+      Comma-separated ref prefixes that always build (promotion branches such
+      as `release/`).
+    required: false
+    default: 'release/'
+  paths:
+    description: >-
+      Newline-separated path prefixes (trailing `/` = prefix match, no
+      trailing `/` = exact match) that gate the build on a non-deploy-surface
+      ref. Empty means no path-based gating at all — every such ref skips,
+      matching MuscleBuddy's ref-only gate. Non-empty adds RedThreadEvents'
+      changed-paths gate on top of the ref match.
+    required: false
+    default: ''
+  changed-paths:
+    description: >-
+      Newline-separated list of changed paths the caller already computed
+      (e.g. `dorny/paths-filter`, or a prior `git diff` step). Takes
+      precedence over `base-sha`. Only consulted when `paths` is non-empty.
+    required: false
+    default: ''
+  base-sha:
+    description: >-
+      Commit to diff against HEAD when `changed-paths` is not supplied and
+      `paths` is non-empty. Requires a checkout deep enough to contain it —
+      when the diff cannot be computed the decision fails open (builds).
+    required: false
+    default: ''
+  force-skip:
+    description: >-
+      'true' to unconditionally skip regardless of ref or path (e.g. a
+      secondary Vercel project on the same repo that only ever deploys its
+      own production branch, MuscleBuddy's `demo` surface).
+    required: false
+    default: 'false'
+  force-skip-reason:
+    description: Reason recorded in `reason` when `force-skip` is 'true'.
+    required: false
+    default: ''
+outputs:
+  build:
+    description: "'true' or 'false'."
+    value: ${{ steps.decide.outputs.build }}
+  reason:
+    description: Human-readable justification, safe to print into a build log.
+    value: ${{ steps.decide.outputs.reason }}
+runs:
+  using: composite
+  steps:
+    - id: decide
+      shell: bash
+      env:
+        DT_MODE: ${{ inputs.mode }}
+        DT_VERCEL_ENV: ${{ inputs.vercel-env }}
+        DT_GIT_REF: ${{ inputs.git-ref }}
+        DT_ALWAYS_BUILD_REFS: ${{ inputs.always-build-refs }}
+        DT_ALWAYS_BUILD_REF_PREFIXES: ${{ inputs.always-build-ref-prefixes }}
+        DT_PATHS: ${{ inputs.paths }}
+        DT_CHANGED_PATHS: ${{ inputs.changed-paths }}
+        DT_BASE_SHA: ${{ inputs.base-sha }}
+        DT_FORCE_SKIP: ${{ inputs.force-skip }}
+        DT_FORCE_SKIP_REASON: ${{ inputs.force-skip-reason }}
+      run: node "$GITHUB_ACTION_PATH/deploy-target.mjs"

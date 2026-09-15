@@ -10,14 +10,17 @@ identical across them.
 | `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. Extra cache paths and a pre-install hook are configurable. |
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
+| `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`). |
-| `actions/accessibility-check` | composite | `pa11y-ci` against a URL the caller is already serving. Tier 2. |
+| `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
+| `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. |
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
+| `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 | `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
@@ -125,6 +128,33 @@ so the tracker never shows a stale "this is broken" once it isn't:
 between the two calls — that pair is the only thing tying a close back to the issue a prior run
 filed. `close` no-ops silently when nothing is open under that title, which is the common case: most
 runs are green and never filed anything.
+
+### `check-dependency-inventory` examples
+
+A monorepo with a markdown table (each dependency is the first column's `` `name` `` code span),
+scanning every package's manifest and treating its own scope as internal:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/dependencies.md
+    manifest-paths: packages/*/package.json
+    workspace-prefixes: '@gmi/,@garrettmakesitllc/'
+```
+
+A repo whose doc is prose rather than a strict table, scanning the root manifest plus two app
+manifests, with an allowlist for dependencies that have no external surface of their own:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/architecture/dependencies.md
+    manifest-paths: package.json,apps/server/package.json,apps/web/package.json,packages/*/package.json
+    dependency-fields: dependencies
+    workspace-prefixes: '@adventureos/'
+    allowlist: 'react,react-dom,zod'
+    match-mode: substring
+```
 
 ### Consuming a reusable workflow
 

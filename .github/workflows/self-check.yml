@@ -77,6 +77,39 @@ jobs:
           fi
           echo "ok"
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # check-dependency-inventory's own logic can't be proven by actionlint or the
+      # YAML shape checks above — only by running it against a fixture pair with a
+      # known-drifted dependency and confirming it actually fails, plus a
+      # known-clean pair that passes. Fixtures live at
+      # actions/check-dependency-inventory/fixtures/{pass,fail}.
+      - name: check-dependency-inventory fixtures fire correctly
+        run: |
+          # The runner's default shell is `bash -e`; the fail fixture is MEANT to
+          # exit non-zero, so its status has to be captured, not fatal.
+          set +e -uo pipefail
+          script=actions/check-dependency-inventory/check.mjs
+          common=(--doc-path doc.md --manifest-paths "packages/*/package.json" --workspace-prefixes "@fixture-scope/")
+
+          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/pass
+          pass_status=$?
+          if [ "$pass_status" -ne 0 ]; then
+            echo "::error::pass fixture should have exited 0, got $pass_status"
+            exit 1
+          fi
+          echo "pass fixture: OK (exit 0, as expected)"
+
+          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/fail
+          fail_status=$?
+          if [ "$fail_status" -eq 0 ]; then
+            echo "::error::fail fixture should have exited non-zero (undocumented 'chalk'), got 0"
+            exit 1
+          fi
+          echo "fail fixture: OK (exit $fail_status, as expected)"
+
   file-failure-issue-fixture:
     name: file-failure-issue fixture (file/close lifecycle)
     runs-on: ubuntu-latest
@@ -90,10 +123,164 @@ jobs:
       - name: Exercise file -> file (dedupe) -> close -> close (no-op)
         run: bash actions/file-failure-issue/fixture-test.sh "the automated check failed"
 
+  check-action-pins-fixture:
+    name: check-action-pins fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # The fixture set carries one violation of each rule the action
+      # enforces (org @main, unpinned third-party tag, major-version skew)
+      # plus lines that must NOT trip it (a trusted owner on a tag, a
+      # correctly SHA-pinned third party, a local action reference). This
+      # step must fail — `continue-on-error` captures that as an outcome to
+      # assert on next, rather than failing the job here.
+      - name: Fixture with violations must fail
+        id: violations
+        continue-on-error: true
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/violations
+
+      - name: Assert the violating fixture failed
+        run: |
+          if [ "${{ steps.violations.outcome }}" != "failure" ]; then
+            echo "::error::check-action-pins passed a fixture with known violations — the check is not firing"
+            exit 1
+          fi
+          echo "ok — violating fixture correctly failed"
+
+      # The clean fixture has no violations and must pass outright — no
+      # continue-on-error, so a regression here fails the job directly.
+      - name: Fixture with no violations must pass
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/clean
+
+  pr-body-lint-fixtures:
+    name: pr-body-lint catches its traps
+    # actions/pr-body-lint has no test suite of its own (this repo has none),
+    # so its fixture cases run here — the same reasoning as the composite-
+    # action structural checks above: nowhere downstream catches a regression
+    # before it reaches a consumer.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # MuscleBuddy #4929: "Does not close #4885 — the recapture itself is
+      # still owed" still closed #4885 on merge. GitHub's parser has no
+      # notion of negation, so this must be caught.
+      - name: Negated close must fail the check
+        id: negated
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Does not close #4885 — the recapture itself is still owed.'
+      - name: Assert negated-close fixture failed
+        if: steps.negated.outcome != 'failure'
+        run: |
+          echo "::error::negated-close fixture was expected to fail the check but outcome was '${{ steps.negated.outcome }}'"
+          exit 1
+
+      # MuscleBuddy #4597: "Closes #4879, #4885" only closed #4879 — the
+      # keyword has to be repeated per issue.
+      - name: Comma-list must fail the check
+        id: comma
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #4879, #4885'
+      - name: Assert comma-list fixture failed
+        if: steps.comma.outcome != 'failure'
+        run: |
+          echo "::error::comma-list fixture was expected to fail the check but outcome was '${{ steps.comma.outcome }}'"
+          exit 1
+
+      - name: Single closing reference must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12'
+
+      - name: Keyword repeated per issue must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12, Closes #34'
+
+  deploy-target-fixtures:
+    name: deploy-target fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Unit-level: deployDecision() directly, the fail-open paths and both
+      # donor shapes (ci#62). node is preinstalled on ubuntu-latest; this
+      # script has no dependencies.
+      - name: deployDecision fixture cases
+        run: node actions/deploy-target/deploy-target.fixtures.mjs
+
+      # Composite-action level: the three cases the issue asks for, run
+      # through the real `uses:` path so a drift between action.yml's env
+      # wiring and the script's env reads is caught here, not in a consumer.
+      - name: SHOULD deploy — dev branch, matching path
+        id: should_deploy
+        uses: ./actions/deploy-target
+        with:
+          git-ref: dev
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: apps/web/src/App.tsx
+
+      - name: assert SHOULD deploy
+        run: |
+          [ "${{ steps.should_deploy.outputs.build }}" = "true" ] || {
+            echo "::error::expected build=true, got '${{ steps.should_deploy.outputs.build }}' (${{ steps.should_deploy.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — wrong branch
+        id: wrong_branch
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+
+      - name: assert SHOULD NOT deploy (wrong branch)
+        run: |
+          [ "${{ steps.wrong_branch.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.wrong_branch.outputs.build }}' (${{ steps.wrong_branch.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — no matching path changed
+        id: no_matching_path
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: |
+            apps/server/index.ts
+            prisma/schema.prisma
+
+      - name: assert SHOULD NOT deploy (no matching path)
+        run: |
+          [ "${{ steps.no_matching_path.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.no_matching_path.outputs.build }}' (${{ steps.no_matching_path.outputs.reason }})"
+            exit 1
+          }
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, file-failure-issue-fixture]
+    needs: [lint, file-failure-issue-fixture, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
