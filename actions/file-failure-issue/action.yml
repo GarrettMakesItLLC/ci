@@ -1,24 +1,41 @@
 name: File a failure issue
 description: >
-  Open an issue for an automation failure nobody is watching, and reuse the
-  existing one instead of filing a duplicate on every run.
+  Open an issue for an automation failure nobody is watching, reusing the
+  existing one instead of filing a duplicate on every run — or, in close
+  mode, close the issue a prior run filed once the failure stops recurring.
 
 inputs:
   title:
     description: Issue title. Also the deduplication key, so keep it stable across runs.
     required: true
   body-file:
-    description: Path to a file holding the issue body.
-    required: true
+    description: Path to a file holding the issue body. Required when mode is `file`; unused in `close`.
+    required: false
+    default: ''
   labels:
-    description: Comma-separated labels to apply.
+    description: Comma-separated labels to apply. Only used in `file` mode.
     required: false
     default: 'type:bug,status:ready'
   dedupe-label:
     description: >
       Label to scope the dedupe search on. Defaults to the first entry of
       `labels`, so a caller that leads with a distinguishing label (e.g.
-      `ci-failure`) needs no extra input.
+      `ci-failure`) needs no extra input. A `close` caller that doesn't pass
+      `labels` must pass this explicitly — it has to match what the `file`
+      call used, or the close search looks under the wrong label.
+    required: false
+    default: ''
+  mode:
+    description: >
+      `file` opens or comments on the tracking issue (the default). `close`
+      finds the open issue by the same title/dedupe-label and closes it with
+      a comment, no-op if none is open.
+    required: false
+    default: 'file'
+  comment:
+    description: >
+      Close mode only: leading text for the closing comment, e.g. "Fixed".
+      Appended with "as of <run URL>." Defaults to "Resolved".
     required: false
     default: ''
   token:
@@ -27,17 +44,22 @@ inputs:
 
 outputs:
   number:
-    description: The issue number filed or commented on.
-    value: ${{ steps.file.outputs.number }}
+    description: >
+      The issue number filed, commented on, or closed. Empty in `close` mode
+      when nothing was open to close.
+    value: ${{ steps.file.outputs.number || steps.close.outputs.number }}
 
 runs:
   using: composite
   steps:
-    # A scheduled or event-driven job that fails silently is the case this exists
-    # for: nothing is watching the Actions tab, so the failure has to arrive
-    # somewhere with a queue. Filing a fresh issue per run instead buries the
-    # first one, so an open match is reused.
+    # A scheduled or event-driven job that fails silently is the case `file`
+    # mode exists for: nothing is watching the Actions tab, so the failure
+    # has to arrive somewhere with a queue. `close` mode is the other half —
+    # an issue left open after the failure stops recurring inverts the
+    # signal, so a caller that re-checks the same condition on every run
+    # closes it the moment the check passes again.
     - name: File or update the issue
+      if: inputs.mode == 'file'
       id: file
       shell: bash
       env:
@@ -47,54 +69,17 @@ runs:
         LABELS: ${{ inputs.labels }}
         DEDUPE_LABEL: ${{ inputs.dedupe-label }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: |
-        set -euo pipefail
+      run: "${{ github.action_path }}/file.sh"
 
-        if [ ! -f "$BODY_FILE" ]; then
-          echo "::error title=Missing body file::$BODY_FILE does not exist."
-          exit 1
-        fi
-
-        # The search index (`gh issue list --search`) lags real-time writes by
-        # minutes, so near-simultaneous failures (a deploy burst, a fan-out
-        # matrix) can each miss the other's issue and file a duplicate. List
-        # open issues by label via the REST endpoint instead — consistent
-        # reads, no staleness window — and paginate: a busy tracker can push
-        # an older open failure past the first page, and a missed match files
-        # a duplicate rather than failing loudly.
-        label="$DEDUPE_LABEL"
-        if [ -z "$label" ]; then
-          IFS=',' read -ra dedupe_names <<< "$LABELS"
-          label="${dedupe_names[0]}"
-        fi
-
-        existing=$(gh api "repos/$GITHUB_REPOSITORY/issues" \
-          -X GET \
-          -f state=open \
-          -f labels="$label" \
-          -f per_page=100 \
-          --paginate \
-          --jq '[.[] | select(.pull_request == null) | select(.title == env.TITLE)] | first | .number // empty')
-
-        if [ -n "$existing" ]; then
-          {
-            echo "Recurred — $RUN_URL"
-            echo
-            cat "$BODY_FILE"
-          } | gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file -
-          echo "number=$existing" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Reused issue::#$existing already tracks this."
-          exit 0
-        fi
-
-        args=()
-        IFS=',' read -ra names <<< "$LABELS"
-        for name in "${names[@]}"; do
-          [ -n "$name" ] && args+=(--label "$name")
-        done
-
-        url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
-          --title "$TITLE" --body-file "$BODY_FILE" "${args[@]}")
-        number="${url##*/}"
-        echo "number=$number" >> "$GITHUB_OUTPUT"
-        echo "::notice title=Filed issue::$url"
+    - name: Close the issue
+      if: inputs.mode == 'close'
+      id: close
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TITLE: ${{ inputs.title }}
+        LABELS: ${{ inputs.labels }}
+        DEDUPE_LABEL: ${{ inputs.dedupe-label }}
+        COMMENT: ${{ inputs.comment }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: "${{ github.action_path }}/close.sh"

@@ -11,7 +11,7 @@ identical across them.
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
-| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
+| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`). |
 | `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
@@ -97,6 +97,37 @@ same dependency cache:
 ```
 
 Both are optional and empty by default — existing callers are unaffected.
+
+### `file-failure-issue`'s `close` mode
+
+`mode: close` is the other half of `mode: file` — same dedupe key, opposite direction. A synthetic
+monitor that reruns the same check on a schedule files on failure and closes on the next success,
+so the tracker never shows a stale "this is broken" once it isn't:
+
+```yaml
+- name: File an alert issue
+  if: steps.check.outcome == 'failure'
+  uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+  with:
+    title: 'URGENT: the scheduled check did not pass'
+    body-file: alert.md
+    labels: ci-failure,type:bug,status:ready
+    token: ${{ github.token }}
+
+- name: Close the alert issue once green again
+  if: steps.check.outcome == 'success'
+  uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+  with:
+    mode: close
+    title: 'URGENT: the scheduled check did not pass'
+    dedupe-label: ci-failure
+    token: ${{ github.token }}
+```
+
+`title` and the dedupe label (`dedupe-label`, or the first entry of `labels`) must match exactly
+between the two calls — that pair is the only thing tying a close back to the issue a prior run
+filed. `close` no-ops silently when nothing is open under that title, which is the common case: most
+runs are green and never filed anything.
 
 ### `check-dependency-inventory` examples
 
