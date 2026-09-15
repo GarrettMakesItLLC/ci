@@ -136,8 +136,12 @@ jobs:
       issues: write
     # Expected to fail: the URL only ever answers 200, so asserting 599
     # proves the status-mismatch path actually goes red rather than
-    # silently passing everything.
-    continue-on-error: true
+    # silently passing everything. `continue-on-error` is not a supported key
+    # on a job that calls a reusable workflow — GitHub then reads the whole
+    # job as an ordinary one missing `runs-on` and rejects `uses`/`with` as
+    # unexpected. Unneeded anyway: probe-fixture-check already runs `if:
+    # always()` and reads this job's `.result`, so a normal failure here
+    # doesn't block it.
     uses: ./.github/workflows/post-deploy-probe.yml
     with:
       probes: |
