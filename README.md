@@ -10,6 +10,7 @@ identical across them.
 | `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. Extra cache paths and a pre-install hook are configurable. |
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
+| `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
