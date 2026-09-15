@@ -1,0 +1,68 @@
+name: Check dependency inventory
+description: >
+  Fail when a direct dependency declared in a workspace's package.json manifests has no
+  row in that repo's dependency-inventory doc. Generalized out of platform's and
+  AdventureOS's identical-in-purpose, divergent-in-detail check.mjs (ci#61) — every
+  repo-specific knob is an input instead of a hardcoded path or regex.
+
+# Composite, not a reusable workflow: this can gate a PR (Tier 1), and a reusable
+# workflow's check name can never match a bare required-context name.
+
+inputs:
+  doc-path:
+    description: Path to the dependency-inventory doc, relative to the checkout root.
+    required: true
+  manifest-paths:
+    description: >
+      Comma-separated package.json paths to scan, relative to the checkout root. A
+      single `*` path segment expands to every subdirectory at that position, so
+      `packages/*/package.json` scans every package. A literal path that doesn't
+      exist is skipped rather than failing the run.
+    required: false
+    default: packages/*/package.json
+  dependency-fields:
+    description: Comma-separated manifest fields to scan for direct dependencies.
+    required: false
+    default: dependencies,devDependencies,peerDependencies
+  workspace-prefixes:
+    description: >
+      Comma-separated name prefixes that are workspace-internal and never need a doc
+      row (e.g. `@gmi/,@garrettmakesitllc/`).
+    required: false
+    default: ''
+  allowlist:
+    description: >
+      Comma-separated exact dependency names that never need a doc row — e.g. a
+      package with no external surface of its own.
+    required: false
+    default: ''
+  match-mode:
+    description: >
+      How a dependency counts as "documented": `table-row` requires the name to be
+      the first column of a markdown table row (`` | `name` | ... ``); `substring`
+      accepts the name appearing anywhere in the doc's text.
+    required: false
+    default: table-row
+
+runs:
+  using: composite
+  steps:
+    - name: Check dependency inventory
+      shell: bash
+      env:
+        DOC_PATH: ${{ inputs.doc-path }}
+        MANIFEST_PATHS: ${{ inputs.manifest-paths }}
+        DEPENDENCY_FIELDS: ${{ inputs.dependency-fields }}
+        WORKSPACE_PREFIXES: ${{ inputs.workspace-prefixes }}
+        ALLOWLIST: ${{ inputs.allowlist }}
+        MATCH_MODE: ${{ inputs.match-mode }}
+      run: |
+        set -euo pipefail
+        node "$GITHUB_ACTION_PATH/check.mjs" \
+          --doc-path "$DOC_PATH" \
+          --manifest-paths "$MANIFEST_PATHS" \
+          --dependency-fields "$DEPENDENCY_FIELDS" \
+          --workspace-prefixes "$WORKSPACE_PREFIXES" \
+          --allowlist "$ALLOWLIST" \
+          --match-mode "$MATCH_MODE" \
+          --cwd "$GITHUB_WORKSPACE"
