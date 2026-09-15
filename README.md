@@ -10,9 +10,11 @@ identical across them.
 | `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. Extra cache paths and a pre-install hook are configurable. |
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
+| `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
-| `actions/accessibility-check` | composite | `pa11y-ci` against a URL the caller is already serving. Tier 2. |
+| `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
+| `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |

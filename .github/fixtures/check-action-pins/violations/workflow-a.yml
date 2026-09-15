@@ -1,0 +1,23 @@
+name: fixture — violations A
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Violation: org-owned action tracking @main — must be refused even
+      # though the owner matches this org (the MuscleBuddy/SideQuest defect
+      # this action must not repeat).
+      - uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@main
+
+      # Violation: third-party action on a mutable tag, not a commit SHA.
+      - uses: getsentry/action-release@v3
+
+      # Not a violation: trusted owner (actions) may stay on a version tag.
+      - uses: actions/checkout@v7
+
+      # Not a violation: major 6 here, but workflow-b.yml pins the same
+      # action at major 5 — that mismatch is asserted from the pair, not
+      # from either file alone.
+      - uses: actions/setup-node@v6
