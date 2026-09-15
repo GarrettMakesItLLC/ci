@@ -127,10 +127,79 @@ jobs:
         with:
           body: 'Closes #12, Closes #34'
 
+  deploy-target-fixtures:
+    name: deploy-target fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Unit-level: deployDecision() directly, the fail-open paths and both
+      # donor shapes (ci#62). node is preinstalled on ubuntu-latest; this
+      # script has no dependencies.
+      - name: deployDecision fixture cases
+        run: node actions/deploy-target/deploy-target.fixtures.mjs
+
+      # Composite-action level: the three cases the issue asks for, run
+      # through the real `uses:` path so a drift between action.yml's env
+      # wiring and the script's env reads is caught here, not in a consumer.
+      - name: SHOULD deploy — dev branch, matching path
+        id: should_deploy
+        uses: ./actions/deploy-target
+        with:
+          git-ref: dev
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: apps/web/src/App.tsx
+
+      - name: assert SHOULD deploy
+        run: |
+          [ "${{ steps.should_deploy.outputs.build }}" = "true" ] || {
+            echo "::error::expected build=true, got '${{ steps.should_deploy.outputs.build }}' (${{ steps.should_deploy.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — wrong branch
+        id: wrong_branch
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+
+      - name: assert SHOULD NOT deploy (wrong branch)
+        run: |
+          [ "${{ steps.wrong_branch.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.wrong_branch.outputs.build }}' (${{ steps.wrong_branch.outputs.reason }})"
+            exit 1
+          }
+
+      - name: SHOULD NOT deploy — no matching path changed
+        id: no_matching_path
+        uses: ./actions/deploy-target
+        with:
+          git-ref: feature/x
+          always-build-refs: dev
+          always-build-ref-prefixes: 'release/'
+          paths: |
+            apps/web/
+          changed-paths: |
+            apps/server/index.ts
+            prisma/schema.prisma
+
+      - name: assert SHOULD NOT deploy (no matching path)
+        run: |
+          [ "${{ steps.no_matching_path.outputs.build }}" = "false" ] || {
+            echo "::error::expected build=false, got '${{ steps.no_matching_path.outputs.build }}' (${{ steps.no_matching_path.outputs.reason }})"
+            exit 1
+          }
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, pr-body-lint-fixtures]
+    needs: [lint, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
