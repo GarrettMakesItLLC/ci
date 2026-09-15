@@ -1,0 +1,33 @@
+name: Lint the PR body for closing-keyword traps
+description: >
+  Catch two silent GitHub closing-keyword failures: a negated keyword ("does
+  not close #N") still closes the issue on merge, and a keyword followed by a
+  comma-separated list ("Closes #A, #B") that only closes the first.
+
+# Composite rather than reusable workflow for the same reason as
+# `pr-title-lint`: a reusable workflow's check is named
+# `<caller-job> / <callee-job>`, which a branch ruleset naming a bare context
+# can never match.
+
+inputs:
+  body:
+    description: >
+      The PR body text to lint. The caller passes
+      `github.event.pull_request.body` — a composite action has no
+      `pull_request` context of its own to read it from.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # No install step, plain node: the checker is dependency-free (a handful
+    # of regexes), so nothing here needs a package install to run. The PR
+    # body is attacker-controlled text (any contributor writes it) — it
+    # reaches the script only through `$PR_BODY`, never interpolated into
+    # `run:` or passed as a shell argument, which is the injection hole
+    # `actions/checkout`'s own docs warn about.
+    - name: Lint PR body for closing-keyword traps
+      shell: bash
+      env:
+        PR_BODY: ${{ inputs.body }}
+      run: node --no-warnings "${{ github.action_path }}/lint.mjs"
