@@ -11,7 +11,6 @@ identical across them.
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating. |
-| `actions/accessibility-check` | composite | `pa11y-ci` against a URL the caller is already serving. Tier 2. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
