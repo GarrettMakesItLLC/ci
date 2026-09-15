@@ -77,6 +77,37 @@ jobs:
           fi
           echo "ok"
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # check-dependency-inventory's own logic can't be proven by actionlint or the
+      # YAML shape checks above — only by running it against a fixture pair with a
+      # known-drifted dependency and confirming it actually fails, plus a
+      # known-clean pair that passes. Fixtures live at
+      # actions/check-dependency-inventory/fixtures/{pass,fail}.
+      - name: check-dependency-inventory fixtures fire correctly
+        run: |
+          set -uo pipefail
+          script=actions/check-dependency-inventory/check.mjs
+          common=(--doc-path doc.md --manifest-paths "packages/*/package.json" --workspace-prefixes "@fixture-scope/")
+
+          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/pass
+          pass_status=$?
+          if [ "$pass_status" -ne 0 ]; then
+            echo "::error::pass fixture should have exited 0, got $pass_status"
+            exit 1
+          fi
+          echo "pass fixture: OK (exit 0, as expected)"
+
+          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/fail
+          fail_status=$?
+          if [ "$fail_status" -eq 0 ]; then
+            echo "::error::fail fixture should have exited non-zero (undocumented 'chalk'), got 0"
+            exit 1
+          fi
+          echo "fail fixture: OK (exit $fail_status, as expected)"
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'

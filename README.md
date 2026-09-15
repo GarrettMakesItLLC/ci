@@ -18,6 +18,7 @@ identical across them.
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. |
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
+| `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 | `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
@@ -94,6 +95,33 @@ same dependency cache:
 ```
 
 Both are optional and empty by default — existing callers are unaffected.
+
+### `check-dependency-inventory` examples
+
+A monorepo with a markdown table (each dependency is the first column's `` `name` `` code span),
+scanning every package's manifest and treating its own scope as internal:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/dependencies.md
+    manifest-paths: packages/*/package.json
+    workspace-prefixes: '@gmi/,@garrettmakesitllc/'
+```
+
+A repo whose doc is prose rather than a strict table, scanning the root manifest plus two app
+manifests, with an allowlist for dependencies that have no external surface of their own:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-inventory@v1
+  with:
+    doc-path: docs/architecture/dependencies.md
+    manifest-paths: package.json,apps/server/package.json,apps/web/package.json,packages/*/package.json
+    dependency-fields: dependencies
+    workspace-prefixes: '@adventureos/'
+    allowlist: 'react,react-dom,zod'
+    match-mode: substring
+```
 
 ### Consuming a reusable workflow
 
