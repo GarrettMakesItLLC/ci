@@ -77,10 +77,60 @@ jobs:
           fi
           echo "ok"
 
+  pr-body-lint-fixtures:
+    name: pr-body-lint catches its traps
+    # actions/pr-body-lint has no test suite of its own (this repo has none),
+    # so its fixture cases run here — the same reasoning as the composite-
+    # action structural checks above: nowhere downstream catches a regression
+    # before it reaches a consumer.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # MuscleBuddy #4929: "Does not close #4885 — the recapture itself is
+      # still owed" still closed #4885 on merge. GitHub's parser has no
+      # notion of negation, so this must be caught.
+      - name: Negated close must fail the check
+        id: negated
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Does not close #4885 — the recapture itself is still owed.'
+      - name: Assert negated-close fixture failed
+        if: steps.negated.outcome != 'failure'
+        run: |
+          echo "::error::negated-close fixture was expected to fail the check but outcome was '${{ steps.negated.outcome }}'"
+          exit 1
+
+      # MuscleBuddy #4597: "Closes #4879, #4885" only closed #4879 — the
+      # keyword has to be repeated per issue.
+      - name: Comma-list must fail the check
+        id: comma
+        continue-on-error: true
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #4879, #4885'
+      - name: Assert comma-list fixture failed
+        if: steps.comma.outcome != 'failure'
+        run: |
+          echo "::error::comma-list fixture was expected to fail the check but outcome was '${{ steps.comma.outcome }}'"
+          exit 1
+
+      - name: Single closing reference must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12'
+
+      - name: Keyword repeated per issue must pass the check
+        uses: ./actions/pr-body-lint
+        with:
+          body: 'Closes #12, Closes #34'
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint]
+    needs: [lint, pr-body-lint-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
