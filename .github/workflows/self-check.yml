@@ -77,10 +77,23 @@ jobs:
           fi
           echo "ok"
 
+  file-failure-issue-fixture:
+    name: file-failure-issue fixture (file/close lifecycle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Unit-level: runs file.sh/close.sh unmodified against a fake `gh`, no
+      # network and nothing filed in a real tracker. See the script header
+      # for why this is safe to run on every PR rather than hitting the API.
+      - name: Exercise file -> file (dedupe) -> close -> close (no-op)
+        run: bash actions/file-failure-issue/fixture-test.sh "the automated check failed"
+
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint]
+    needs: [lint, file-failure-issue-fixture]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
