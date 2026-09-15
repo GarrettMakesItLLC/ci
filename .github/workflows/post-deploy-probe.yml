@@ -136,6 +136,7 @@ jobs:
           if ! echo "$PROBES_JSON" | jq empty 2>/tmp/jq-err.txt; then
             echo "::error::probes is not valid JSON: $(cat /tmp/jq-err.txt)"
             echo "result=failure" >>"$GITHUB_OUTPUT"
+            # shellcheck disable=SC2016 # backticks here are literal markdown, not command substitution
             printf '`probes` input is not valid JSON: %s\n' "$(cat /tmp/jq-err.txt)" >/tmp/post-deploy-probe-failures.md
             exit 1
           fi
@@ -144,6 +145,7 @@ jobs:
           if [ "$count" -eq 0 ]; then
             echo "::error::probes is an empty array — nothing to check."
             echo "result=failure" >>"$GITHUB_OUTPUT"
+            # shellcheck disable=SC2016 # backticks here are literal markdown, not command substitution
             echo '`probes` was an empty array — nothing was checked.' >/tmp/post-deploy-probe-failures.md
             exit 1
           fi
