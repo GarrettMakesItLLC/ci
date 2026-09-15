@@ -1,0 +1,288 @@
+name: Post-deploy probe
+
+# Shared post-deploy availability monitor (#63). Five products each hand-wrote
+# this shape — probe a URL set, assert status/headers/body, file an issue on
+# failure — as bespoke Node scripts or inline bash: NetWorthy's
+# public-availability.yml (status + a forbidden SSO-wall substring) and
+# post-deploy-smoke.yml (bare /health status), SideQuest's live-headers.yml
+# (required/contains header assertions against a deployed CSP), and the
+# status-check halves of AdventureOS's post-deploy-smoke.yml and
+# RedThreadEvents's deploy-verify.yml. What's genuinely identical across all
+# of them: curl a URL, retry through the deploy's rollout window, assert an
+# HTTP status and some header/body conditions, and file-or-reuse an issue on
+# failure via file-failure-issue.
+#
+# What did NOT generalize, and stays product-specific: MuscleBuddy's two
+# monitors parse live script/config content (the Turnstile loader, a
+# robots.txt policy against sixteen named crawler user agents) rather than
+# asserting simple status/header/body conditions; AdventureOS's and
+# RedThreadEvents's SHA-served-commit verification and RedThreadEvents's
+# multi-target `deployment_status` resolution and prerender/SEO checks are
+# real per-repo logic, not shared shape. Migrating those stays a per-product
+# decision.
+#
+# Called as (see README.md for the full probes shape and consuming examples):
+#
+#   post-deploy-probe:
+#     permissions:
+#       contents: read
+#       issues: write
+#     uses: GarrettMakesItLLC/ci/.github/workflows/post-deploy-probe.yml@v1
+#     with:
+#       probes: |
+#         [{"url": "https://example.com/health", "expected_status": 200}]
+#       issue-title: Production health check failed
+#     secrets:
+#       token: ${{ secrets.GITHUB_TOKEN }}
+#
+# The permissions block on the calling job is not optional in practice — see
+# README.md's "The permissions: block on the calling job is not optional in
+# practice" paragraph. This workflow's own `issues: write` only narrows what
+# the caller granted; it never widens it, so a caller that omits the block
+# fails the whole run at startup with zero jobs and no logs.
+
+on:
+  workflow_call:
+    inputs:
+      probes:
+        description: >
+          JSON array of probe entries. Each entry: {url (required), method
+          (default GET), expected_status (default 200), headers (request
+          headers to send, object), expect_headers_present (array of header
+          names that must appear in the response), expect_headers_contain
+          (object of header name -> substring the response header's value
+          must contain), body_contains (substring the response body must
+          contain), body_not_contains (substring the response body must NOT
+          contain, e.g. an SSO-wall marker)}.
+        required: true
+        type: string
+      issue-title:
+        description: Title for the failure issue. Also the dedupe key — keep it stable across runs.
+        required: true
+        type: string
+      issue-labels:
+        description: Comma-separated labels for the filed issue. The first label is also the dedupe scope.
+        required: false
+        type: string
+        default: 'ci-failure,type:bug,status:ready,source:agent'
+      close-on-recovery:
+        description: Close (and comment on) the open failure issue once every probe passes again.
+        required: false
+        type: boolean
+        default: true
+      retries:
+        description: Retries per probe entry before it counts as failed — rides out a deploy's rollout window.
+        required: false
+        type: number
+        default: 3
+      retry-delay-seconds:
+        description: Seconds to wait between retries of a single probe entry.
+        required: false
+        type: number
+        default: 10
+      timeout-seconds:
+        description: Per-request curl timeout.
+        required: false
+        type: number
+        default: 30
+      dry-run:
+        description: >
+          Run every probe and compute pass/fail, but never file or close a
+          real issue. For a CI fixture invocation that needs to prove the
+          failure path actually fires without spamming a real issue.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      token:
+        description: Token with issues:write. Required unless dry-run is true.
+        required: false
+    outputs:
+      result:
+        description: '"success" or "failure" — every probe passed, or at least one did not.'
+        value: ${{ jobs.probe.outputs.result }}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe endpoints
+    runs-on: ubuntu-latest
+    # Bounded by the caller's retry budget, not GitHub's 360-minute default —
+    # generous enough for a handful of entries at the default 3 retries / 10s
+    # each, tight enough that a hung endpoint can't wedge the run.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      result: ${{ steps.probe.outputs.result }}
+    steps:
+      # No checkout: every step here is curl/jq/gh against ubuntu-latest's
+      # preinstalled tooling, dependency-free by design like the donor
+      # scripts it replaces — nothing here can fail because a lockfile broke.
+      - name: Run every probe entry
+        id: probe
+        continue-on-error: true
+        env:
+          PROBES_JSON: ${{ inputs.probes }}
+          RETRIES: ${{ inputs.retries }}
+          RETRY_DELAY: ${{ inputs.retry-delay-seconds }}
+          TIMEOUT: ${{ inputs.timeout-seconds }}
+        run: |
+          set -uo pipefail
+
+          if ! echo "$PROBES_JSON" | jq empty 2>/tmp/jq-err.txt; then
+            echo "::error::probes is not valid JSON: $(cat /tmp/jq-err.txt)"
+            echo "result=failure" >>"$GITHUB_OUTPUT"
+            printf '`probes` input is not valid JSON: %s\n' "$(cat /tmp/jq-err.txt)" >/tmp/post-deploy-probe-failures.md
+            exit 1
+          fi
+
+          count=$(echo "$PROBES_JSON" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::probes is an empty array — nothing to check."
+            echo "result=failure" >>"$GITHUB_OUTPUT"
+            echo '`probes` was an empty array — nothing was checked.' >/tmp/post-deploy-probe-failures.md
+            exit 1
+          fi
+
+          failures=""
+
+          for i in $(seq 0 $((count - 1))); do
+            entry=$(echo "$PROBES_JSON" | jq -c ".[$i]")
+            url=$(echo "$entry" | jq -r '.url')
+            method=$(echo "$entry" | jq -r '.method // "GET"')
+            expected_status=$(echo "$entry" | jq -r '.expected_status // 200')
+            body_contains=$(echo "$entry" | jq -r '.body_contains // empty')
+            body_not_contains=$(echo "$entry" | jq -r '.body_not_contains // empty')
+
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              failures="${failures}- entry $i: missing \`url\`\n"
+              continue
+            fi
+
+            header_args=()
+            while IFS= read -r h; do
+              [ -n "$h" ] && header_args+=(-H "$h")
+            done < <(echo "$entry" | jq -r '.headers // {} | to_entries[] | "\(.key): \(.value)"')
+
+            attempt=0
+            ok=0
+            code="000"
+            body_file=$(mktemp)
+            headers_file=$(mktemp)
+            while [ "$attempt" -le "$RETRIES" ]; do
+              code=$(curl -sS -o "$body_file" -D "$headers_file" -w '%{http_code}' \
+                --max-time "$TIMEOUT" -X "$method" "${header_args[@]}" "$url" 2>/tmp/curl-err.txt || echo "000")
+              if [ "$code" = "$expected_status" ]; then
+                ok=1
+                break
+              fi
+              attempt=$((attempt + 1))
+              [ "$attempt" -le "$RETRIES" ] && sleep "$RETRY_DELAY"
+            done
+
+            entry_fail=""
+            if [ "$ok" -ne 1 ]; then
+              entry_fail="${entry_fail}status was \`${code}\`, expected \`${expected_status}\` (after ${RETRIES} retries). "
+            fi
+
+            if [ -n "$body_contains" ] && ! grep -qF -- "$body_contains" "$body_file"; then
+              entry_fail="${entry_fail}body did not contain \"${body_contains}\". "
+            fi
+            if [ -n "$body_not_contains" ] && grep -qF -- "$body_not_contains" "$body_file"; then
+              entry_fail="${entry_fail}body unexpectedly contained \"${body_not_contains}\". "
+            fi
+
+            while IFS= read -r hname; do
+              [ -n "$hname" ] || continue
+              tr -d '\r' <"$headers_file" | grep -qi "^${hname}:" ||
+                entry_fail="${entry_fail}missing header \"${hname}\". "
+            done < <(echo "$entry" | jq -r '.expect_headers_present // [] | .[]')
+
+            while IFS=$'\t' read -r hname hval; do
+              [ -n "$hname" ] || continue
+              line=$(tr -d '\r' <"$headers_file" | grep -i "^${hname}:" || true)
+              case "$line" in
+                *"$hval"*) ;;
+                *) entry_fail="${entry_fail}header \"${hname}\" did not contain \"${hval}\" (got: \"${line:-<absent>}\"). " ;;
+              esac
+            done < <(echo "$entry" | jq -r '.expect_headers_contain // {} | to_entries[] | "\(.key)\t\(.value)"')
+
+            if [ -n "$entry_fail" ]; then
+              echo "::error::${method} ${url}: ${entry_fail}"
+              failures="${failures}- \`${method} ${url}\`: ${entry_fail}\n"
+            else
+              echo "${method} ${url} -> ${code} OK"
+            fi
+            rm -f "$body_file" "$headers_file"
+          done
+
+          if [ -n "$failures" ]; then
+            echo "result=failure" >>"$GITHUB_OUTPUT"
+            printf '%b' "$failures" >/tmp/post-deploy-probe-failures.md
+            exit 1
+          fi
+          echo "result=success" >>"$GITHUB_OUTPUT"
+
+      - name: Compose the failure report
+        if: steps.probe.outputs.result == 'failure'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "A post-deploy probe failed."
+            echo
+            cat /tmp/post-deploy-probe-failures.md
+            echo
+            echo "Run: ${RUN_URL}"
+          } >/tmp/post-deploy-probe-report.md
+
+      # `ci-failure` is load-bearing when a caller leads its own labels list
+      # with it, the same convention every other failure-filer in this repo
+      # follows: it's what a repo's close-failure-issue.sh matches on to
+      # close the issue once the probe recovers on its own schedule/push
+      # trigger, independent of this workflow's own close-on-recovery step.
+      - name: File or update the failure issue
+        if: steps.probe.outputs.result == 'failure' && inputs.dry-run != true
+        uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+        with:
+          title: ${{ inputs.issue-title }}
+          body-file: /tmp/post-deploy-probe-report.md
+          labels: ${{ inputs.issue-labels }}
+          token: ${{ secrets.token }}
+
+      # The counterpart to file-failure-issue: close (with a comment, not
+      # silently) whatever it filed once a later run finds everything
+      # passing again. Same dedupe key — exact title, scoped to the labels'
+      # first entry — so it closes the same issue it would have reused.
+      - name: Close the failure issue on recovery
+        if: steps.probe.outputs.result == 'success' && inputs.close-on-recovery && inputs.dry-run != true
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          TITLE: ${{ inputs.issue-title }}
+          LABELS: ${{ inputs.issue-labels }}
+        run: |
+          set -euo pipefail
+          label="${LABELS%%,*}"
+          existing=$(gh api "repos/${{ github.repository }}/issues" \
+            -X GET \
+            -f state=open \
+            -f labels="$label" \
+            -f per_page=100 \
+            --paginate \
+            --jq '[.[] | select(.pull_request == null) | select(.title == env.TITLE)] | first | .number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "A later run of this probe passed every check — closing."
+            gh issue close "$existing" --repo "${{ github.repository }}"
+            echo "::notice title=Closed recovered issue::#$existing"
+          fi
+
+      # The probe's own verdict is the job's verdict — reported after the
+      # issue is filed, so a red run never skips the filing.
+      - name: Fail the run when a probe failed
+        if: steps.probe.outputs.result == 'failure'
+        run: exit 1

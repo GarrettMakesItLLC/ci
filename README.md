@@ -21,6 +21,7 @@ identical across them.
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 | `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
+| `.github/workflows/post-deploy-probe.yml` | reusable | Probe a URL set, assert status/headers/body, file an issue on failure. |
 
 ## Why almost everything here is a composite action
 
@@ -159,6 +160,59 @@ jobs:
       issues: write
     uses: GarrettMakesItLLC/ci/.github/workflows/issue-status-clear.yml@v1
 ```
+
+### `post-deploy-probe.yml`: shared availability/header/body monitor
+
+Probes a URL set on a schedule or after a deploy, asserts status/header/body conditions per URL, and
+files (or reuses, or closes on recovery) an issue via `file-failure-issue`. It replaces the shape five
+products hand-wrote separately — it does not replace product-specific monitors that parse actual
+response content (a robots.txt policy, a Turnstile challenge, a SHA-served-commit check).
+
+```yaml
+# .github/workflows/post-deploy-probe.yml
+name: Post-deploy probe
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    permissions:
+      contents: read
+      issues: write
+    uses: GarrettMakesItLLC/ci/.github/workflows/post-deploy-probe.yml@v1
+    with:
+      probes: |
+        [
+          {"url": "https://example.com/health", "expected_status": 200},
+          {
+            "url": "https://example.com/",
+            "expected_status": 200,
+            "body_not_contains": "Authentication Required",
+            "expect_headers_present": ["strict-transport-security"],
+            "expect_headers_contain": {"content-security-policy": "script-src"}
+          }
+        ]
+      issue-title: Production availability probe failed
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Each `probes` entry: `url` (required), `method` (default `GET`), `expected_status` (default `200`),
+`headers` (request headers to send), `expect_headers_present` (response header names that must
+appear), `expect_headers_contain` (response header name -> substring its value must contain),
+`body_contains` / `body_not_contains` (a substring the response body must, or must not, contain — the
+latter is how NetWorthy's SSO-wall detection maps onto this). A failing entry retries
+`retries` times (default 3), `retry-delay-seconds` apart (default 10), to ride out a deploy's rollout
+window before counting as failed.
+
+Set `dry-run: true` to compute pass/fail without filing or closing a real issue — used by this repo's
+own `self-check.yml` to prove the failure path fires on a known-bad fixture without spamming an issue
+against `GarrettMakesItLLC/ci` on every PR.
 
 ### Repos running a merge queue: one check, both events
 
