@@ -67,9 +67,14 @@ runs:
       if: inputs.package-manager == 'pnpm'
       uses: pnpm/action-setup@v4
 
+    # `package-manager-cache: false`: setup-node@v7 otherwise adds its own npm
+    # cache whenever it sees a lockfile. That duplicates the node_modules cache
+    # below (both key on the lockfile, so they hit and miss together), costs a
+    # post-job save, and pushes repos toward the 10 GB cache cap (ci#77).
     - uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}
+        package-manager-cache: false
 
     # The seam between setup-node and the install — e.g. pinning npm via Corepack,
     # which has to run after the Node install (the shim is per-install) and before
