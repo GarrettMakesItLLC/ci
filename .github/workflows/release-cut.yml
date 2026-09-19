@@ -109,15 +109,40 @@ jobs:
       - name: Refuse to cut while a promotion PR is already open
         # Two open release branches is a state nobody can reason about: the
         # second one's diff is against a `main` the first is about to move.
+        #
+        # The refusal is a DESIGNED outcome, so it exits 0 with a `::notice::`
+        # and gates the rest of the job — the same shape "Nothing to promote"
+        # below already uses. It used to `exit 1`, which painted the nightly
+        # schedule red every morning a promotion was open: 7 of this workflow's
+        # last 100 scheduled runs, each one the workflow doing exactly its job.
+        # A run that is red for working teaches the reader that red means
+        # nothing here, which is the cost — the refusal itself was always right.
+        #
+        # Non-red is not the same as silent. The notice names the open PR, the
+        # step summary carries it, and the job still reports which of the two
+        # no-op paths it took. Only a genuine cut error is a failure now.
+        id: inflight
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           open=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
             --json number,headRefName --jq '.[] | "#\(.number) (\(.headRefName))"')
           if [ -n "$open" ]; then
-            echo "::error title=A promotion is already in flight::$open is open into main. Merge or close it before cutting another."
-            exit 1
+            echo "::notice title=A promotion is already in flight::$open is open into main. No branch cut — merge or close it, then cut again."
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No branch cut"
+              echo
+              echo "A promotion is already open into \`main\`: $open"
+              echo
+              echo "This is the designed refusal, not a failure. Two open release"
+              echo "branches cannot be reasoned about — the second one's diff is"
+              echo "against a \`main\` the first is about to move."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          echo "refused=false" >> "$GITHUB_OUTPUT"
           echo "OK: no open promotion PR."
 
       - name: Refuse to cut while this cycle's promotion was closed unmerged
@@ -137,7 +162,7 @@ jobs:
         #   - Only a head that is not already an ancestor of `main`. Promotions
         #     carry `dev` wholesale, so a superseded cut's commits usually ship
         #     in the next one anyway.
-        if: ${{ !inputs.allow-unmerged-promotions }}
+        if: ${{ steps.inflight.outputs.refused != 'true' && !inputs.allow-unmerged-promotions }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -169,6 +194,7 @@ jobs:
 
       - name: Resolve the commit to cut from
         id: point
+        if: steps.inflight.outputs.refused != 'true'
         env:
           REQUESTED: ${{ inputs.sha }}
         run: |
@@ -183,6 +209,7 @@ jobs:
 
       - name: Is there anything to promote?
         id: diff
+        if: steps.inflight.outputs.refused != 'true'
         # Full fetch, not --depth=1: after a promotion `main`'s tip is a merge
         # commit that is NOT on dev, so a shallow main would graft the traversal
         # short and count commits that already shipped.
@@ -192,12 +219,12 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
       - name: Nothing to promote
-        if: steps.diff.outputs.count == '0'
+        if: steps.inflight.outputs.refused != 'true' && steps.diff.outputs.count == '0'
         run: |
           echo "::notice title=Nothing to promote::main is already at this commit. No branch cut."
 
       - name: Create the release branch
-        if: steps.diff.outputs.count != '0'
+        if: steps.inflight.outputs.refused != 'true' && steps.diff.outputs.count != '0'
         id: branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -223,7 +250,7 @@ jobs:
       # fork gets. Nothing here is load-bearing on the secret existing.
       - name: Open the promotion PR
         id: pr
-        if: steps.diff.outputs.count != '0' && env.HAS_PAT == 'true'
+        if: steps.inflight.outputs.refused != 'true' && steps.diff.outputs.count != '0' && env.HAS_PAT == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}
           BRANCH: ${{ steps.branch.outputs.name }}
@@ -365,7 +392,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Tell the promoter what to do next
-        if: steps.diff.outputs.count != '0'
+        if: steps.inflight.outputs.refused != 'true' && steps.diff.outputs.count != '0'
         env:
           PR_URL: ${{ steps.pr.outputs.url }}
           BRANCH: ${{ steps.branch.outputs.name }}
