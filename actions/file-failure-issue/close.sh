@@ -9,7 +9,7 @@
 # Nothing open under that title is the NORMAL case: most runs are green and
 # never filed anything, so this is a silent no-op, not an error.
 #
-# Env in: GH_TOKEN, TITLE, LABELS, DEDUPE_LABEL, COMMENT, RUN_URL,
+# Env in: GH_TOKEN, TITLE, LABELS, DEDUPE_LABEL, DEDUPE_KEY, COMMENT, RUN_URL,
 #         GITHUB_REPOSITORY, GITHUB_OUTPUT.
 set -euo pipefail
 
@@ -18,7 +18,8 @@ dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$dir/lib.sh"
 
 label="$(resolve_dedupe_label "$LABELS" "$DEDUPE_LABEL")"
-existing="$(find_existing_issue "$label")"
+marker="$(dedupe_marker "$TITLE" "${DEDUPE_KEY:-}")"
+existing="$(find_existing_issue "$label" "$marker")"
 
 if [ -z "$existing" ]; then
   echo "number=" >>"$GITHUB_OUTPUT"

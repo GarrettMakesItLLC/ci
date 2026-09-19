@@ -6,7 +6,8 @@
 # `gh` backed by an in-memory JSON array, so this exercises the actual dedupe
 # and mode logic without filing anything in a real issue tracker. Covers the
 # full lifecycle: file (creates) -> file again (comments, no dupe) -> close
-# (closes) -> close again (no-op, no error).
+# (closes) -> close again (no-op, no error) — plus the dedupe-key path, where
+# two different titles sharing a key must dedupe onto the same issue.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,9 +26,10 @@ echo '[]' >"$STATE"
 # This mock re-implements gh's built-in --jq evaluation (gh bundles its own
 # jq engine; it does not shell out to a system `jq` binary, so the real
 # action never depends on one being installed). It hardcodes the one query
-# lib.sh actually issues — filter by state, drop PRs, match by title — rather
-# than interpreting the --jq string generically, since that's the only
-# expression this repo's own code produces.
+# lib.sh actually issues — filter by state, drop PRs, match by marker
+# contained in the body — rather than interpreting the --jq string
+# generically, since that's the only expression this repo's own code
+# produces.
 FAKE_GH="$WORK/gh"
 cat >"$FAKE_GH" <<'GHEOF'
 #!/usr/bin/env bash
@@ -43,12 +45,18 @@ if [ "$1" = "api" ]; then
       state_filter="${args[$((i + 1))]#state=}"
     fi
   done
-  STATE_FILTER="$state_filter" TITLE="$TITLE" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
+  STATE_FILTER="$state_filter" MARKER="$MARKER" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
 import json, os
 state = json.load(open(os.environ["FIXTURE_STATE"]))
 sf = os.environ["STATE_FILTER"]
-title = os.environ["TITLE"]
-match = [i for i in state if i["state"] == sf and i.get("pull_request") is None and i["title"] == title]
+marker = os.environ["MARKER"]
+match = [
+    i for i in state
+    if i["state"] == sf
+    and i.get("pull_request") is None
+    and i.get("body") is not None
+    and marker in i["body"]
+]
 print(match[0]["number"] if match else "")
 PYEOF
   exit 0
@@ -56,18 +64,24 @@ fi
 
 if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
   title=""
-  for ((i = 0; i < $#; i++)); do
-    if [ "${!i}" = "--title" ]; then
-      next=$((i + 1))
-      title="${!next}"
+  body_file=""
+  args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[$i]}" = "--title" ]; then
+      title="${args[$((i + 1))]}"
+    fi
+    if [ "${args[$i]}" = "--body-file" ]; then
+      body_file="${args[$((i + 1))]}"
     fi
   done
-  TITLE_ARG="$title" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
+  TITLE_ARG="$title" BODY_FILE_ARG="$body_file" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
 import json, os
 path = os.environ["FIXTURE_STATE"]
 state = json.load(open(path))
 num = len(state) + 1
-state.append({"number": num, "title": os.environ["TITLE_ARG"], "state": "open", "pull_request": None})
+body_file = os.environ["BODY_FILE_ARG"]
+body = open(body_file).read() if body_file and body_file != "-" else ""
+state.append({"number": num, "title": os.environ["TITLE_ARG"], "state": "open", "pull_request": None, "body": body})
 json.dump(state, open(path, "w"))
 print(f"https://github.com/o/r/issues/{num}")
 PYEOF
@@ -105,13 +119,12 @@ export PATH="$WORK:$PATH"
 export FIXTURE_STATE="$STATE"
 export FIXTURE_CALLS="$CALLS"
 
-# jq's `--jq` filter in lib.sh reads `env.TITLE` — the real `gh api --jq`
-# reads env vars too, so the fake must expose the same one.
 run_mode() {
   local mode="$1"
   local title="$2"
   local body_file="${3:-}"
   local comment="${4:-}"
+  local dedupe_key="${5:-}"
   GITHUB_OUTPUT="$WORK/output"
   : >"$GITHUB_OUTPUT"
   GH_TOKEN=fake \
@@ -119,6 +132,7 @@ run_mode() {
     BODY_FILE="$body_file" \
     LABELS="ci-failure,type:bug" \
     DEDUPE_LABEL="" \
+    DEDUPE_KEY="$dedupe_key" \
     COMMENT="$comment" \
     RUN_URL="https://example/run/1" \
     GITHUB_REPOSITORY="o/r" \
@@ -154,6 +168,18 @@ assert_state_open_count 0
 
 echo "== 4. close mode again, nothing open -> no-op, no error =="
 run_mode close "URGENT: og monitor failing" "" "Fixed"
+assert_state_open_count 0
+
+echo "== 5. file mode with dedupe-key, nothing open -> creates =="
+run_mode file "nightly lane has gone quiet" "$WORK/body.md" "" "nightly-lane"
+assert_state_open_count 1
+
+echo "== 6. file mode, DIFFERENT title, SAME dedupe-key -> comments, no new issue =="
+run_mode file "nightly lane is failing" "$WORK/body.md" "" "nightly-lane"
+assert_state_open_count 1
+
+echo "== 7. close mode with the same dedupe-key (different title again) -> closes =="
+run_mode close "nightly lane recovered" "" "Fixed" "nightly-lane"
 assert_state_open_count 0
 
 echo "ALL PASSED"

@@ -3,8 +3,8 @@
 # File mode: open an issue for an unwatched automation failure, reusing an
 # open match instead of duplicating. See actions/file-failure-issue/action.yml.
 #
-# Env in: GH_TOKEN, TITLE, BODY_FILE, LABELS, DEDUPE_LABEL, RUN_URL,
-#         GITHUB_REPOSITORY, GITHUB_OUTPUT.
+# Env in: GH_TOKEN, TITLE, BODY_FILE, LABELS, DEDUPE_LABEL, DEDUPE_KEY,
+#         RUN_URL, GITHUB_REPOSITORY, GITHUB_OUTPUT.
 set -euo pipefail
 
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,8 @@ if [ ! -f "$BODY_FILE" ]; then
 fi
 
 label="$(resolve_dedupe_label "$LABELS" "$DEDUPE_LABEL")"
-existing="$(find_existing_issue "$label")"
+marker="$(dedupe_marker "$TITLE" "${DEDUPE_KEY:-}")"
+existing="$(find_existing_issue "$label" "$marker")"
 
 if [ -n "$existing" ]; then
   {
@@ -36,8 +37,15 @@ for name in "${names[@]}"; do
   [ -n "$name" ] && args+=(--label "$name")
 done
 
+body_with_marker="$(mktemp)"
+{
+  echo "$marker"
+  echo
+  cat "$BODY_FILE"
+} >"$body_with_marker"
+
 url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
-  --title "$TITLE" --body-file "$BODY_FILE" "${args[@]}")
+  --title "$TITLE" --body-file "$body_with_marker" "${args[@]}")
 number="${url##*/}"
 echo "number=$number" >>"$GITHUB_OUTPUT"
 echo "::notice title=Filed issue::$url"
