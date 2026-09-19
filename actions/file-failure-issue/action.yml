@@ -25,6 +25,16 @@ inputs:
       call used, or the close search looks under the wrong label.
     required: false
     default: ''
+  dedupe-key:
+    description: >
+      Stable identity for what's failing — a lane or workflow name — used to
+      find the issue to reuse. Defaults to `title`, but a caller whose title
+      names the symptom (e.g. "is failing" vs. "has gone quiet" for the same
+      lane) should pass its own stable key here so both symptoms land on one
+      issue instead of each filing its own. A `close` caller must pass the
+      same key the `file` call used.
+    required: false
+    default: ''
   mode:
     description: >
       `file` opens or comments on the tracking issue (the default). `close`
@@ -68,6 +78,7 @@ runs:
         BODY_FILE: ${{ inputs.body-file }}
         LABELS: ${{ inputs.labels }}
         DEDUPE_LABEL: ${{ inputs.dedupe-label }}
+        DEDUPE_KEY: ${{ inputs.dedupe-key }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: "${{ github.action_path }}/file.sh"
 
@@ -80,6 +91,7 @@ runs:
         TITLE: ${{ inputs.title }}
         LABELS: ${{ inputs.labels }}
         DEDUPE_LABEL: ${{ inputs.dedupe-label }}
+        DEDUPE_KEY: ${{ inputs.dedupe-key }}
         COMMENT: ${{ inputs.comment }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: "${{ github.action_path }}/close.sh"
