@@ -418,21 +418,117 @@ jobs:
           fi
           echo "v1 covers every workflow and action on main."
 
-  ci-success:
-    name: CI Success
-    if: always() && github.event_name == 'pull_request'
-    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
+  ci-success-dogfood:
+    name: ci-success behaves
+    # `ci-success` is the one required status check in every consumer repo, and
+    # nothing executed it. `self-check` validated that its `action.yml` parses
+    # and re-implemented the aggregate inline in jq, so a behaviour regression
+    # shipped to all five consumers on the next release with no test having run
+    # it (#54b).
+    #
+    # The `needs` context is just JSON, so every case is synthesizable without
+    # orchestrating real jobs. `continue-on-error` captures a must-fail case as
+    # an outcome to assert on, the same shape the fixture jobs above use.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify no required job failed or was skipped
-        env:
-          RESULTS: ${{ toJSON(needs) }}
+      - uses: actions/checkout@v7
+
+      - name: All success passes
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"success"}}'
+
+      - name: A skipped job fails when it is not allowed
+        id: skipped
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"skipped"}}'
+
+      - name: A failed job fails
+        id: failed
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"failure"}}'
+
+      - name: A cancelled job fails
+        id: cancelled
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"cancelled"}}'
+
+      - name: Empty needs fails rather than passing vacuously
+        id: empty
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{}'
+
+      - name: Assert every must-fail case failed
         run: |
-          echo "$RESULTS"
-          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$RESULTS")
-          if [ -n "$bad" ]; then
-            echo "::error::$bad"
+          set -euo pipefail
+          for pair in \
+            "skipped:${{ steps.skipped.outcome }}" \
+            "failed:${{ steps.failed.outcome }}" \
+            "cancelled:${{ steps.cancelled.outcome }}" \
+            "empty:${{ steps.empty.outcome }}"; do
+            name="${pair%%:*}"; outcome="${pair##*:}"
+            if [ "$outcome" != "failure" ]; then
+              echo "::error::ci-success PASSED the '$name' case — the gate every repo requires is not firing"
+              exit 1
+            fi
+            echo "ok — $name correctly failed"
+          done
+
+      # The allow-skipped path, including the empty-sentinel handling that has
+      # no other cover: with no allow-skipped the code builds `allowed=",,"`
+      # and must NOT treat that as matching every job. If it did, every skipped
+      # job would read as allowed and the check would pass over real gaps —
+      # which is the exact failure `ci-success` exists to prevent.
+      - name: An allowed skip passes
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"skipped"}}'
+          allow-skipped: b
+
+      - name: An allow-skipped list tolerates spaces
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"skipped"},"b":{"result":"skipped"}}'
+          allow-skipped: 'a, b'
+
+      - name: A job NOT on the allow list still fails
+        id: partial
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"skipped"},"b":{"result":"skipped"}}'
+          allow-skipped: a
+
+      - name: Assert the partial allow list still failed
+        run: |
+          if [ "${{ steps.partial.outcome }}" != "failure" ]; then
+            echo "::error::ci-success allowed a skip that was not on its allow-skipped list"
             exit 1
           fi
-          echo "All required jobs succeeded."
+          echo "ok — an unlisted skip correctly failed"
+
+  ci-success:
+    name: CI Success
+    if: always() && github.event_name == 'pull_request'
+    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Dogfooded, not re-implemented. This job previously inlined its own jq
+      # aggregate, so the repo publishing `ci-success` did not use it — and an
+      # inline copy cannot catch a regression in the published one (#54b).
+      - name: Verify no required job failed or was skipped
+        uses: ./actions/ci-success
+        with:
+          needs: ${{ toJSON(needs) }}

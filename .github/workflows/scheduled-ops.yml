@@ -47,6 +47,24 @@ on:
         description: Branch the dependency-bump PR is opened from/to.
         type: string
         default: chore/scheduled-dependency-bump
+    secrets:
+      RELEASE_PAT:
+        description: >
+          A PAT for opening the dependency-bump PR. OPTIONAL, and the job
+          degrades loudly without it rather than silently.
+
+          This enterprise blocks `GITHUB_TOKEN` from creating pull requests
+          outright — "The enterprise does not allow GitHub Actions to create or
+          approve pull requests", 409, reproduced in this org by platform#578
+          from a workflow that also declared `pull-requests: write`. The
+          permission is not the constraint; the policy is, and no permissions
+          block can satisfy it.
+
+          `release-cut.yml` in this repo already takes a PAT for the adjacent
+          reason (a `GITHUB_TOKEN`-opened PR triggers no `pull_request`
+          workflows, so its checks never run). This job inherited neither that
+          token choice nor its safety net (#54a).
+        required: false
 
 jobs:
   dependency-bump:
@@ -57,6 +75,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # For the failure issue below — a job that cannot report its own failure
+      # is the thing #54a is about.
+      issues: write
     steps:
       - uses: actions/checkout@v7
 
@@ -94,9 +115,17 @@ jobs:
           fi
 
       - name: Open the bump PR
+        id: pr
+        # Falls back to GITHUB_TOKEN so the job still runs where the policy
+        # does not apply; where it does, the failure is now REPORTED rather
+        # than left in an Actions tab nobody watches.
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # The PAT when the caller supplies one, `GITHUB_TOKEN` otherwise.
+          # Under this enterprise's policy the fallback CANNOT open a PR; it is
+          # kept so the workflow still works wherever the policy does not
+          # apply, and the failure below is what makes the difference visible.
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           branch: ${{ inputs.dependency-bump-branch }}
           commit-message: 'chore(deps): scheduled dependency bump'
           title: 'chore(deps): scheduled dependency bump'
@@ -104,6 +133,50 @@ jobs:
             Automated dependency bump from the `scheduled-ops` workflow. CI on this
             PR is the verification — merge once it is green.
           labels: type:task,source:agent
+
+      # A WEEKLY SCHEDULED JOB FAILS INTO AN ACTIONS TAB NOBODY WATCHES.
+      # `release-cut.yml` in this repo already files an issue when its PR step
+      # fails; this workflow inherited the hazard and not the safety net
+      # (#54a). Without this the only symptom of a blocked PR creation is
+      # dependencies quietly never being bumped.
+      - name: Describe the failure
+        if: failure() && steps.pr.outcome == 'failure'
+        shell: bash
+        env:
+          HAS_PAT: ${{ secrets.RELEASE_PAT != '' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The scheduled dependency-bump PR could not be opened."
+            echo
+            if [ "$HAS_PAT" != "true" ]; then
+              echo "**No \`RELEASE_PAT\` secret is set for this caller**, so the step ran as"
+              echo "\`GITHUB_TOKEN\`. This enterprise blocks that outright:"
+              echo
+              echo '> The enterprise does not allow GitHub Actions to create or approve pull requests'
+              echo
+              echo "No \`permissions:\` block can satisfy that — it is org policy, not a scope."
+              echo "Pass a PAT: \`secrets: inherit\` plus a \`RELEASE_PAT\` on the calling repo,"
+              echo "the same secret \`release-cut.yml\` already uses."
+            else
+              echo "A \`RELEASE_PAT\` was supplied, so this is NOT the enterprise PR-creation"
+              echo "policy. Read the step log — a PAT that has expired or lost \`repo\` scope"
+              echo "fails here the same way."
+            fi
+            echo
+            echo "Alternatively, disable this job with \`run-dependency-bump: false\` where"
+            echo "Renovate already owns dependency updates — it creates PRs as a GitHub App"
+            echo "and is not subject to this policy."
+          } > /tmp/bump-failure.md
+
+      - name: File an issue if the bump PR could not be opened
+        if: failure() && steps.pr.outcome == 'failure'
+        uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+        with:
+          title: 'Scheduled dependency bump could not open its PR'
+          body-file: /tmp/bump-failure.md
+          labels: ci-failure,area:platform,type:bug,status:ready,source:agent
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   stale-check:
     name: Stale issues and PRs

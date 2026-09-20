@@ -18,7 +18,7 @@ identical across them.
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
-| `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. |
+| `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
 | `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
@@ -201,6 +201,30 @@ start. So the cut refuses to run when this cycle's promotion PR was closed witho
 what lets `main` drift far enough to conflict, and fails after opening the PR if that PR already
 conflicts. Pass `allow-unmerged-promotions: true` to cut anyway, accepting that the abandoned
 promotion's commits never shipped.
+
+**A composite action needs the caller's permissions too, and `security-scan` is the one that
+bites.** A composite action cannot declare `permissions:` at all — it runs inside the caller's job
+and inherits that job's token. `github/codeql-action/analyze` must upload its results, which
+requires `security-events: write`, and a repo on the common read-only default `GITHUB_TOKEN` gets a
+failure with nothing in the consuming example to have anticipated it (#54d). Unlike the reusable
+workflows below this does not fail at `startup_failure` — the job starts, runs the whole analysis,
+and fails at the upload, so the cost is the full CodeQL run as well as the red check.
+
+```yaml
+jobs:
+  security:
+    permissions:
+      contents: read
+      # CodeQL uploads its results; without this the analysis runs and then
+      # fails at the upload step.
+      security-events: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: GarrettMakesItLLC/ci/actions/security-scan@v1
+```
+
+Set `run-codeql: 'false'` if a repo wants only the dependency audit; then no extra permission is needed.
 
 **The `permissions:` block on the calling job is not optional in practice, for either reusable
 workflow here.** A called workflow's own `permissions:` block can only narrow what the run was
