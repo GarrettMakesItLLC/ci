@@ -71,17 +71,30 @@ jobs:
           PM: ${{ inputs.package-manager }}
         run: |
           set -euo pipefail
+          # Pinned, not `latest`. This job holds `contents: write` +
+          # `pull-requests: write`, and a bare `npx --yes npm-check-updates`
+          # resolves and executes whatever `latest` is at that moment —
+          # arbitrary third-party code in a credentialed job, with no version
+          # bound and no review. Same class as an unpinned action, by a
+          # different route (#53).
+          #
+          # A version rather than `--no-install`, which `format-check` uses:
+          # that works there because the formatter IS a dependency of the repo
+          # being checked. `npm-check-updates` is not a dependency of anything
+          # here, so there is nothing local to run and the choice is between a
+          # pinned fetch and an unpinned one.
+          NCU_VERSION=23.1.0
           if [ "$PM" = "pnpm" ]; then
             corepack enable pnpm
-            npx --yes npm-check-updates --packageManager pnpm -u
+            npx --yes "npm-check-updates@${NCU_VERSION}" --packageManager pnpm -u
             pnpm install
           else
-            npx --yes npm-check-updates -u
+            npx --yes "npm-check-updates@${NCU_VERSION}" -u
             npm install
           fi
 
       - name: Open the bump PR
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ inputs.dependency-bump-branch }}

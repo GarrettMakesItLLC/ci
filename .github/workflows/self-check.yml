@@ -35,7 +35,7 @@ jobs:
       # it catches a bad `inputs:` block or an undefined context here rather than
       # in a consumer's first red run.
       - name: actionlint
-        uses: raven-actions/actionlint@v2
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
         with:
           fail-on-error: true
 
@@ -224,6 +224,46 @@ jobs:
         uses: ./actions/check-action-pins
         with:
           workflow-dir: .github/fixtures/check-action-pins/clean
+
+      # The recursion itself, guarded. `nested-only/` holds its violation in
+      # a SUBDIRECTORY and nothing at the top level, so a collector that
+      # stopped recursing would open no files and report success — which is
+      # exactly how `actions/` passed while holding two unpinned third-party
+      # references (#53). This step must fail.
+      - name: Nested-only fixture must fail
+        id: nested
+        continue-on-error: true
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/nested-only
+
+      - name: Assert the nested-only fixture failed
+        run: |
+          if [ "${{ steps.nested.outcome }}" != "failure" ]; then
+            echo "::error::check-action-pins passed a fixture whose only violation is in a subdirectory — it has stopped recursing, and any composite-action tree it is pointed at is unchecked"
+            exit 1
+          fi
+          echo "ok — nested-only fixture correctly failed"
+
+      # THIS REPO'S OWN REFERENCES, not just the fixtures.
+      #
+      # The action existed, was fixture-tested, and had never been pointed at
+      # the tree that ships it — so the repo enforcing pinning across the
+      # fleet ran four third-party actions on mutable tags in every
+      # consumer's pipeline (#53). A checker aimed only at its own fixtures
+      # proves the checker works and nothing about the repo.
+      #
+      # Both trees, because `uses:` lines live in both: reusable workflows
+      # under .github/workflows, composite actions under actions/.
+      - name: This repo's workflows are pinned
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/workflows
+
+      - name: This repo's composite actions are pinned
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: actions
 
   pr-body-lint-fixtures:
     name: pr-body-lint catches its traps

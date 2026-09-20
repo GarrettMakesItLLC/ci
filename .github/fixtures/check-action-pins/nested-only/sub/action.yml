@@ -1,0 +1,16 @@
+# A violation that exists ONLY in a subdirectory.
+#
+# This fixture guards the RECURSION, not the rules. A flat read of
+# `nested-only/` finds no `.yml` at all and reports success having opened
+# nothing — which is how `actions/` passed while holding two unpinned
+# third-party references, because composite actions live at
+# `actions/<name>/action.yml` rather than directly in the tree (#53).
+#
+# So this directory deliberately has no top-level workflow file. If the
+# collector ever stops recursing, this fixture passes and self-check fails on
+# the assertion that it must not.
+name: nested-only fixture
+runs:
+  using: composite
+  steps:
+    - uses: some-third-party/action@v1

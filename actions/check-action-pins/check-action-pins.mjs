@@ -182,17 +182,40 @@ function checkMajorSkew(files) {
 }
 
 /**
+ * Every `.yml`/`.yaml` under `dir`, RECURSIVELY.
+ *
+ * A flat read is correct for `.github/workflows`, where the files sit
+ * directly in the directory, and silently wrong for a composite-action tree:
+ * those live at `actions/<name>/action.yml`, one level down, so a flat read
+ * of `actions` matches nothing and the check passes having examined no files
+ * at all. That is a guard reporting success about a tree it never opened —
+ * caught by pointing this at the `ci` repo's own `actions/` directory while
+ * it held two unpinned third-party references, and watching it pass (#53).
+ *
+ * Recursion covers both shapes with no input to get wrong.
+ *
  * @param {string} dir
  * @returns {Array<{ file: string, text: string }>}
  */
 function readWorkflowDir(dir) {
-  return readdirSync(dir)
-    .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
-    .sort()
-    .map((name) => {
-      const file = path.join(dir, name);
-      return { file, text: readFileSync(file, 'utf8') };
-    });
+  /** @type {Array<{ file: string, text: string }>} */
+  const found = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : 1,
+    )) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        // `node_modules` is somebody else's tree and would swamp the report.
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        walk(full);
+      } else if (entry.name.endsWith('.yml') || entry.name.endsWith('.yaml')) {
+        found.push({ file: full, text: readFileSync(full, 'utf8') });
+      }
+    }
+  };
+  walk(dir);
+  return found;
 }
 
 function parseBool(value, fallback) {
