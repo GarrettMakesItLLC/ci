@@ -112,3 +112,26 @@ jobs:
             echo
             echo "Every consumer pinning \`@v1\` picks this up on its next run."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # `v1` moves; this does not. Each release also gets an immutable
+      # `v1.N.M`, which the canary consumer (NetWorthy) pins so it runs an exact
+      # version rather than whatever `v1` points at today. The tag ruleset
+      # "Immutable release tags" refuses any update or deletion of `v1.*.*`,
+      # and creating a ref that already exists fails, so a re-run cannot
+      # repoint one.
+      - name: Cut the immutable release tag
+        if: steps.optout.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          tag="$(bash scripts/next-release-tag.sh)"
+          existing="$(git tag --points-at "${SHA}" -l 'v1.*.*' | head -n1)"
+          if [ -n "$existing" ]; then
+            echo "::notice::${SHA} is already released as ${existing}"
+            exit 0
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${tag}" -f sha="${SHA}" >/dev/null
+          echo "created ${tag} -> ${SHA}"
+          echo "Released as \`${tag}\`. Bump the canary's pins to it once v1 is proven." >> "$GITHUB_STEP_SUMMARY"

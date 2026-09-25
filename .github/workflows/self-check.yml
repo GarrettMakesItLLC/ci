@@ -62,6 +62,11 @@ jobs:
       - name: check-dependency-inventory fixtures fire correctly
         run: bash scripts/check-dependency-inventory-fixtures.sh
 
+      # release.yml names each release from this; a wrong bump rule mints an
+      # immutable tag nobody can take back.
+      - name: next-release-tag fixtures
+        run: bash scripts/next-release-tag.test.sh
+
   # Proves post-deploy-probe.yml's failure path actually fires, not just that
   # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
   # block, but says nothing about whether the probe logic itself detects a
