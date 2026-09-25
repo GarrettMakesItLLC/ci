@@ -1,8 +1,12 @@
 {
   "version": 1,
   "logDir": ".ci-replica",
-  "env": { "CI": "true" },
-  "unset": ["BASH_ENV"],
+  "env": {
+    "CI": "true"
+  },
+  "unset": [
+    "BASH_ENV"
+  ],
   "jobs": [
     {
       "name": "lint",
@@ -12,14 +16,17 @@
         "actionlint",
         "bash scripts/check-composite-shape.sh",
         "bash scripts/check-doc-pins.sh",
-        "bash scripts/check-dependency-inventory-fixtures.sh"
+        "bash scripts/check-dependency-inventory-fixtures.sh",
+        "bash scripts/next-release-tag.test.sh"
       ]
     },
     {
       "name": "file-failure-issue-fixture",
       "$mirrors": "self-check.yml `file-failure-issue-fixture`",
       "budgetSeconds": 60,
-      "commands": ["bash actions/file-failure-issue/fixture-test.sh \"the automated check failed\""]
+      "commands": [
+        "bash actions/file-failure-issue/fixture-test.sh \"the automated check failed\""
+      ]
     },
     {
       "name": "check-action-pins-fixture",

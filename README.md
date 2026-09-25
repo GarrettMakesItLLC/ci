@@ -45,7 +45,8 @@ nothing requires either's check name to stay stable.
 PR in those repos to catch it.
 
 `v1` tracks `main`: merging is what releases, and the `Release` workflow repoints the tag once the
-self-check on the merged commit is green. A change meant for a future major says `[no-release]` in
+self-check on the merged commit is green, and cuts an immutable `v1.N.M` for the canary (see
+**Releasing**). A change meant for a future major says `[no-release]` in
 its merge commit and leaves `v1` alone.
 
 ```yaml
@@ -376,11 +377,22 @@ workflow file is open.
 ## Releasing
 
 `v1` is a moving major tag. A backward-compatible change moves it; a breaking one cuts `v2` and
-consumers migrate deliberately.
+consumers migrate deliberately. Force-moving a tag is the standard Actions convention and the reason
+pinning `@main` is wrong: a consumer opts into `v1`'s compatibility promise, not into this repo's tip.
 
-```bash
-git tag -f v1 && git push -f origin v1
-```
+Every release also gets an **immutable** `v1.N.M` (`scripts/next-release-tag.sh`: a `feat` since the
+last one bumps the minor, anything else the patch). The repo's `Immutable release tags` tag ruleset refuses
+any update or deletion of `v1.*.*`, so a pinned version means the same code forever.
 
-Force-moving a tag is the standard Actions convention and the reason pinning `@main` is wrong: a
-consumer opts into `v1`'s compatibility promise, not into this repo's tip.
+### The canary: NetWorthy
+
+NetWorthy consumes more of this repo than any other product — `setup-node-workspace`, `e2e-test`,
+`pr-title-lint`, `ci-success`, `post-deploy-probe`, `release-cut` and `issue-status-clear` — so it is
+the one that finds a bad release first, and it has no traffic that a red check would cost.
+
+1. **Before merging** a change to `actions/` or `.github/workflows/`, open a NetWorthy PR pinning the
+   candidate commit SHA and let its CI run. Green there is what authorizes the merge here.
+2. Merging moves `v1` for every other consumer and cuts the next `v1.N.M`.
+3. NetWorthy then pins that `v1.N.M` — never `@v1` — so between releases it runs an exact version.
+
+The other products pin `@v1`.

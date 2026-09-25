@@ -48,8 +48,8 @@ There is no test suite; the consumers are the tests. Before moving `v1`:
 ~/dotclaude/bin/ci-replica.sh           # self-check's jobs, locally, per .claude/ci-replica.json
 ```
 
-Validate against a real consumer by pointing one repo's workflow at the commit SHA in a PR and
-letting its CI run. A tag moved on an unproven commit breaks four repos simultaneously, so that
+Validate against the canary consumer, NetWorthy (README § Releasing), by pointing its workflow at
+the commit SHA in a PR and letting its CI run. A tag moved on an unproven commit breaks four repos simultaneously, so that
 validation belongs **before the merge** — merging is what releases now, and there is no gap
 afterwards in which to have second thoughts.
 
