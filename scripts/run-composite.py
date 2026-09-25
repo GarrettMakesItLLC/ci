@@ -88,8 +88,9 @@ def run(action_dir, given):
         if (meta or {}).get("required") and not inputs.get(name):
             raise Unsupported(f"required input missing: {name}")
 
-    step_outputs = {}
-    for index, step in enumerate(spec["runs"].get("steps") or []):
+    steps = spec["runs"].get("steps") or []
+    # Refuse before running anything: a half-executed action is worse than none.
+    for index, step in enumerate(steps):
         label = step.get("name") or step.get("id") or f"step {index}"
         if "uses" in step:
             raise Unsupported(f"{label}: a nested `uses:` step cannot run locally")
@@ -97,7 +98,11 @@ def run(action_dir, given):
             raise Unsupported(f"{label}: step `if:` is not evaluated locally")
         if step.get("shell") != "bash":
             raise Unsupported(f"{label}: shell {step.get('shell')!r} is not supported")
+        for text in [step.get("run", ""), *(step.get("env") or {}).values()]:
+            substitute(text, inputs, action_path, {})
 
+    step_outputs = {}
+    for step in steps:
         script = substitute(step["run"], inputs, action_path, step_outputs)
         env = dict(os.environ)
         for k, v in (step.get("env") or {}).items():
