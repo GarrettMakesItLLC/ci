@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "logDir": ".ci-replica",
+  "env": { "CI": "true" },
+  "unset": ["BASH_ENV"],
+  "jobs": [
+    {
+      "name": "lint",
+      "$mirrors": "self-check.yml `lint`",
+      "budgetSeconds": 120,
+      "commands": [
+        "actionlint",
+        "bash scripts/check-composite-shape.sh",
+        "bash scripts/check-doc-pins.sh",
+        "bash scripts/check-dependency-inventory-fixtures.sh"
+      ]
+    },
+    {
+      "name": "file-failure-issue-fixture",
+      "$mirrors": "self-check.yml `file-failure-issue-fixture`",
+      "budgetSeconds": 60,
+      "commands": ["bash actions/file-failure-issue/fixture-test.sh \"the automated check failed\""]
+    },
+    {
+      "name": "check-action-pins-fixture",
+      "$mirrors": "self-check.yml `check-action-pins-fixture`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/check-action-pins --input workflow-dir=.github/fixtures/check-action-pins/violations --expect fail",
+        "scripts/run-composite.py actions/check-action-pins --input workflow-dir=.github/fixtures/check-action-pins/clean",
+        "scripts/run-composite.py actions/check-action-pins --input workflow-dir=.github/fixtures/check-action-pins/nested-only --expect fail",
+        "scripts/run-composite.py actions/check-action-pins --input workflow-dir=.github/workflows",
+        "scripts/run-composite.py actions/check-action-pins --input workflow-dir=actions"
+      ]
+    },
+    {
+      "name": "pr-body-lint-fixtures",
+      "$mirrors": "self-check.yml `pr-body-lint-fixtures`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/pr-body-lint --input 'body=Does not close #4885 — the recapture itself is still owed.' --expect fail",
+        "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #4879, #4885' --expect fail",
+        "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #12'",
+        "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #12, Closes #34'"
+      ]
+    },
+    {
+      "name": "deploy-target-fixtures",
+      "$mirrors": "self-check.yml `deploy-target-fixtures`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "node actions/deploy-target/deploy-target.fixtures.mjs",
+        "scripts/run-composite.py actions/deploy-target --input git-ref=dev --input always-build-refs=dev --input always-build-ref-prefixes=release/ --input 'paths=apps/web/' --input changed-paths=apps/web/src/App.tsx --expect-output build=true",
+        "scripts/run-composite.py actions/deploy-target --input git-ref=feature/x --input always-build-refs=dev --input always-build-ref-prefixes=release/ --expect-output build=false",
+        "scripts/run-composite.py actions/deploy-target --input git-ref=feature/x --input always-build-refs=dev --input always-build-ref-prefixes=release/ --input 'paths=apps/web/' --input $'changed-paths=apps/server/index.ts\\nprisma/schema.prisma' --expect-output build=false"
+      ]
+    },
+    {
+      "name": "ci-success-dogfood",
+      "$mirrors": "self-check.yml `ci-success-dogfood`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"success\"},\"b\":{\"result\":\"success\"}}'",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"success\"},\"b\":{\"result\":\"skipped\"}}' --expect fail",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"failure\"}}' --expect fail",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"cancelled\"}}' --expect fail",
+        "scripts/run-composite.py actions/ci-success --input 'needs={}' --expect fail",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"success\"},\"b\":{\"result\":\"skipped\"}}' --input allow-skipped=b",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"skipped\"},\"b\":{\"result\":\"skipped\"}}' --input 'allow-skipped=a, b'",
+        "scripts/run-composite.py actions/ci-success --input 'needs={\"a\":{\"result\":\"skipped\"},\"b\":{\"result\":\"skipped\"}}' --input allow-skipped=a --expect fail"
+      ]
+    },
+    {
+      "name": "post-deploy-probe-fixtures",
+      "local": false,
+      "localReason": "probe-fixture-good/bad call the reusable workflow post-deploy-probe.yml, which only a runner executes; owed as `self-check-on-actions` in .claude/owed-verdicts.json",
+      "commands": []
+    },
+    {
+      "name": "v1-current",
+      "local": false,
+      "localReason": "runs on push to main, never on a PR; v1 is expected to trail main until release.yml runs on Actions (owed as `v1-release`)",
+      "commands": []
+    }
+  ]
+}

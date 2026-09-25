@@ -45,13 +45,27 @@ each job bills a whole minute rounded up.
 There is no test suite; the consumers are the tests. Before moving `v1`:
 
 ```bash
-actionlint                              # not installed on this machine — CI runs it
+~/dotclaude/bin/ci-replica.sh           # self-check's jobs, locally, per .claude/ci-replica.json
 ```
 
 Validate against a real consumer by pointing one repo's workflow at the commit SHA in a PR and
 letting its CI run. A tag moved on an unproven commit breaks four repos simultaneously, so that
 validation belongs **before the merge** — merging is what releases now, and there is no gap
 afterwards in which to have second thoughts.
+
+### When Actions is down
+
+`.claude/fleet-mode.json` says whether the repo is in degraded mode, and #82 is its coordination
+issue. A merge is then authorized by `ALL GREEN @ <sha>` from the replica on that SHA, not by CI.
+The replica runs self-check's fixture jobs through each composite action's real `action.yml` with
+`scripts/run-composite.py`. It cannot run a reusable workflow, so the post-deploy-probe fixtures are
+NOT-RUN.
+
+**A window merge carries `[no-release]` in its merge commit.** No consumer CI can validate it before
+the merge, so it must not move `v1` on the first push after Actions returns. It ships when the
+`v1-release` item in `.claude/owed-verdicts.json` is paid: a consumer runs the SHA, then Release runs
+by hand. Pay that item before merging anything else once Actions is back, because the next ordinary
+merge moves `v1` over every window change at once.
 
 ## Scope
 

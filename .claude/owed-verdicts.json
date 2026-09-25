@@ -1,0 +1,25 @@
+{
+  "$comment": "Verdicts GitHub Actions owes ci for the window it refused every job (GarrettMakesItLLC/platform#998), and how each is repaid. A `paid` records the run that measured it, the main SHA and the result; a red result counts as a payment when it names the issue it filed. Keep `.claude/fleet-mode.json` on `degraded` until every item here is paid.",
+  "window": {
+    "from": "2026-09-16T09:01:05Z",
+    "issue": "GarrettMakesItLLC/ci#82"
+  },
+  "items": [
+    {
+      "id": "self-check-on-actions",
+      "verdict": "One self-check.yml run of main on Actions: actionlint as raven-actions runs it, the post-deploy-probe fixtures, and every fixture job through the real runner.",
+      "why": "The replica cannot run a reusable workflow, so probe-fixture-good/bad are NOT-RUN in every window report, and run-composite.py is a model of the runner rather than the runner.",
+      "owedFor": ["main during the window"],
+      "howToPay": "Actions → Self check → Run workflow on main. Record the run URL, the SHA and its conclusion.",
+      "paid": null
+    },
+    {
+      "id": "v1-release",
+      "verdict": "The release.yml run that moves v1 over every change merged to main during the window, then one consumer PR per changed action proving it on that consumer's CI.",
+      "why": "Consumers pin @v1, so a window merge reaches nobody until the tag moves, and the repo's own rule is that a tag moves only once a real consumer has run the commit.",
+      "owedFor": ["actions/ and .github/workflows/ changes merged during the window"],
+      "howToPay": "Point one consumer's workflow at main's SHA in a PR and let its CI run; once green, run Release. Record both run URLs, then run the v1-current job.",
+      "paid": null
+    }
+  ]
+}

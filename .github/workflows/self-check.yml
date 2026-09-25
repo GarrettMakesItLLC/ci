@@ -35,7 +35,7 @@ jobs:
       # it catches a bad `inputs:` block or an undefined context here rather than
       # in a consumer's first red run.
       - name: actionlint
-        uses: raven-actions/actionlint@v2
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
         with:
           fail-on-error: true
 
@@ -43,43 +43,12 @@ jobs:
       # workflows — so validate those separately: every action.yml must parse and
       # declare the fields the runner requires.
       - name: Composite actions declare what the runner needs
-        run: |
-          fail=0
-          shopt -s nullglob
-          found=0
-          for f in actions/*/action.yml; do
-            found=$((found + 1))
-            for key in name description runs; do
-              grep -qE "^${key}:" "$f" || { echo "::error file=$f::missing top-level '${key}:'"; fail=1; }
-            done
-            grep -qE "^  using: composite" "$f" || { echo "::error file=$f::runs.using must be 'composite'"; fail=1; }
-            # Every step in a composite action must declare a shell, and the
-            # runner's error for a missing one names no file.
-            awk -v f="$f" '
-              /^    - / { instep=1; hasrun=0; hasshell=0; hasuses=0 }
-              /^      run:/   { hasrun=1 }
-              /^      shell:/ { hasshell=1 }
-              /^      uses:/  { hasuses=1 }
-              /^    - |^$/ {
-                if (instep && hasrun && !hasshell && !hasuses) {
-                  printf "::error file=%s::a run: step is missing shell:\n", f; exit 1
-                }
-              }
-            ' "$f" || fail=1
-          done
-          [ "$found" -eq 0 ] && { echo "::error::no composite actions found — did the layout change?"; fail=1; }
-          echo "checked $found composite action(s)"
-          exit "$fail"
+        run: bash scripts/check-composite-shape.sh
 
       # The README is the consumer-facing contract. If it tells people to pin
       # @main, someone will.
       - name: README pins a tag, never @main
-        run: |
-          if grep -nE "GarrettMakesItLLC/ci[^@]*@main" README.md CLAUDE.md; then
-            echo "::error::docs must pin a version tag, never @main"
-            exit 1
-          fi
-          echo "ok"
+        run: bash scripts/check-doc-pins.sh
 
       - uses: actions/setup-node@v7
         with:
@@ -91,28 +60,7 @@ jobs:
       # known-clean pair that passes. Fixtures live at
       # actions/check-dependency-inventory/fixtures/{pass,fail}.
       - name: check-dependency-inventory fixtures fire correctly
-        run: |
-          # The runner's default shell is `bash -e`; the fail fixture is MEANT to
-          # exit non-zero, so its status has to be captured, not fatal.
-          set +e -uo pipefail
-          script=actions/check-dependency-inventory/check.mjs
-          common=(--doc-path doc.md --manifest-paths "packages/*/package.json" --workspace-prefixes "@fixture-scope/")
-
-          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/pass
-          pass_status=$?
-          if [ "$pass_status" -ne 0 ]; then
-            echo "::error::pass fixture should have exited 0, got $pass_status"
-            exit 1
-          fi
-          echo "pass fixture: OK (exit 0, as expected)"
-
-          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/fail
-          fail_status=$?
-          if [ "$fail_status" -eq 0 ]; then
-            echo "::error::fail fixture should have exited non-zero (undocumented 'chalk'), got 0"
-            exit 1
-          fi
-          echo "fail fixture: OK (exit $fail_status, as expected)"
+        run: bash scripts/check-dependency-inventory-fixtures.sh
 
   # Proves post-deploy-probe.yml's failure path actually fires, not just that
   # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
@@ -224,6 +172,46 @@ jobs:
         uses: ./actions/check-action-pins
         with:
           workflow-dir: .github/fixtures/check-action-pins/clean
+
+      # The recursion itself, guarded. `nested-only/` holds its violation in
+      # a SUBDIRECTORY and nothing at the top level, so a collector that
+      # stopped recursing would open no files and report success — which is
+      # exactly how `actions/` passed while holding two unpinned third-party
+      # references (#53). This step must fail.
+      - name: Nested-only fixture must fail
+        id: nested
+        continue-on-error: true
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/fixtures/check-action-pins/nested-only
+
+      - name: Assert the nested-only fixture failed
+        run: |
+          if [ "${{ steps.nested.outcome }}" != "failure" ]; then
+            echo "::error::check-action-pins passed a fixture whose only violation is in a subdirectory — it has stopped recursing, and any composite-action tree it is pointed at is unchecked"
+            exit 1
+          fi
+          echo "ok — nested-only fixture correctly failed"
+
+      # THIS REPO'S OWN REFERENCES, not just the fixtures.
+      #
+      # The action existed, was fixture-tested, and had never been pointed at
+      # the tree that ships it — so the repo enforcing pinning across the
+      # fleet ran four third-party actions on mutable tags in every
+      # consumer's pipeline (#53). A checker aimed only at its own fixtures
+      # proves the checker works and nothing about the repo.
+      #
+      # Both trees, because `uses:` lines live in both: reusable workflows
+      # under .github/workflows, composite actions under actions/.
+      - name: This repo's workflows are pinned
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: .github/workflows
+
+      - name: This repo's composite actions are pinned
+        uses: ./actions/check-action-pins
+        with:
+          workflow-dir: actions
 
   pr-body-lint-fixtures:
     name: pr-body-lint catches its traps
@@ -378,21 +366,117 @@ jobs:
           fi
           echo "v1 covers every workflow and action on main."
 
-  ci-success:
-    name: CI Success
-    if: always() && github.event_name == 'pull_request'
-    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, pr-body-lint-fixtures, deploy-target-fixtures]
+  ci-success-dogfood:
+    name: ci-success behaves
+    # `ci-success` is the one required status check in every consumer repo, and
+    # nothing executed it. `self-check` validated that its `action.yml` parses
+    # and re-implemented the aggregate inline in jq, so a behaviour regression
+    # shipped to all five consumers on the next release with no test having run
+    # it (#54b).
+    #
+    # The `needs` context is just JSON, so every case is synthesizable without
+    # orchestrating real jobs. `continue-on-error` captures a must-fail case as
+    # an outcome to assert on, the same shape the fixture jobs above use.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify no required job failed or was skipped
-        env:
-          RESULTS: ${{ toJSON(needs) }}
+      - uses: actions/checkout@v7
+
+      - name: All success passes
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"success"}}'
+
+      - name: A skipped job fails when it is not allowed
+        id: skipped
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"skipped"}}'
+
+      - name: A failed job fails
+        id: failed
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"failure"}}'
+
+      - name: A cancelled job fails
+        id: cancelled
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"cancelled"}}'
+
+      - name: Empty needs fails rather than passing vacuously
+        id: empty
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{}'
+
+      - name: Assert every must-fail case failed
         run: |
-          echo "$RESULTS"
-          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$RESULTS")
-          if [ -n "$bad" ]; then
-            echo "::error::$bad"
+          set -euo pipefail
+          for pair in \
+            "skipped:${{ steps.skipped.outcome }}" \
+            "failed:${{ steps.failed.outcome }}" \
+            "cancelled:${{ steps.cancelled.outcome }}" \
+            "empty:${{ steps.empty.outcome }}"; do
+            name="${pair%%:*}"; outcome="${pair##*:}"
+            if [ "$outcome" != "failure" ]; then
+              echo "::error::ci-success PASSED the '$name' case — the gate every repo requires is not firing"
+              exit 1
+            fi
+            echo "ok — $name correctly failed"
+          done
+
+      # The allow-skipped path, including the empty-sentinel handling that has
+      # no other cover: with no allow-skipped the code builds `allowed=",,"`
+      # and must NOT treat that as matching every job. If it did, every skipped
+      # job would read as allowed and the check would pass over real gaps —
+      # which is the exact failure `ci-success` exists to prevent.
+      - name: An allowed skip passes
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"success"},"b":{"result":"skipped"}}'
+          allow-skipped: b
+
+      - name: An allow-skipped list tolerates spaces
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"skipped"},"b":{"result":"skipped"}}'
+          allow-skipped: 'a, b'
+
+      - name: A job NOT on the allow list still fails
+        id: partial
+        continue-on-error: true
+        uses: ./actions/ci-success
+        with:
+          needs: '{"a":{"result":"skipped"},"b":{"result":"skipped"}}'
+          allow-skipped: a
+
+      - name: Assert the partial allow list still failed
+        run: |
+          if [ "${{ steps.partial.outcome }}" != "failure" ]; then
+            echo "::error::ci-success allowed a skip that was not on its allow-skipped list"
             exit 1
           fi
-          echo "All required jobs succeeded."
+          echo "ok — an unlisted skip correctly failed"
+
+  ci-success:
+    name: CI Success
+    if: always() && github.event_name == 'pull_request'
+    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Dogfooded, not re-implemented. This job previously inlined its own jq
+      # aggregate, so the repo publishing `ci-success` did not use it — and an
+      # inline copy cannot catch a regression in the published one (#54b).
+      - name: Verify no required job failed or was skipped
+        uses: ./actions/ci-success
+        with:
+          needs: ${{ toJSON(needs) }}

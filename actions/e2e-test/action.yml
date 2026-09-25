@@ -85,6 +85,44 @@ runs:
           npx playwright install $BROWSERS
         fi
 
+    # The browser binaries are cached a step above; the apt packages
+    # `install-deps` downloads were not, so every run re-fetched them from
+    # azure.archive.ubuntu.com. NetWorthy PR #790 timed out at its 20-minute
+    # cap four times in a row (~20m17s each) with apt still downloading — not a
+    # hang, just a slow mirror, and every repo on this path paid the same cost
+    # on every run (#49).
+    #
+    # A STALE CACHE IS STILL CORRECT, which is what makes a coarse key safe
+    # here: the cache only lets apt skip a DOWNLOAD. Anything missing, or
+    # superseded by a newer version, is fetched normally — so the worst a stale
+    # entry costs is the download it would have cost anyway. That is why the
+    # key is not tied to a package list nothing can enumerate ahead of time.
+    - name: Restore the apt package cache
+      if: inputs.install-deps == 'true'
+      id: apt-cache
+      uses: actions/cache@v6
+      with:
+        path: /tmp/apt-archives
+        key: playwright-apt-${{ runner.os }}-${{ inputs.browsers }}
+        restore-keys: |
+          playwright-apt-${{ runner.os }}-
+
+    - name: Seed apt from the cache
+      if: inputs.install-deps == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        sudo mkdir -p /var/cache/apt/archives
+        # `cp -n`: never clobber a .deb apt already has, and a miss is not an
+        # error — an empty or absent cache is the cold path, not a failure.
+        if [ -d /tmp/apt-archives ]; then
+          sudo cp -n /tmp/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+        fi
+        # Runners set this false, which is why nothing was left to cache. The
+        # archives are cleared after install unless apt is told to keep them.
+        echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+          | sudo tee /etc/apt/apt.conf.d/99keep-downloaded-packages >/dev/null
+
     # apt-get against a stalled mirror can hang past the job's own timeout with
     # no signal why (#47) — a per-attempt timeout turns that into a fast, clearly
     # labeled failure, and a retry absorbs the transient mirror flake outright.
@@ -113,6 +151,21 @@ runs:
           attempt=$((attempt + 1))
           sleep $((attempt * 10))
         done
+
+    # Copy the .debs back out for `actions/cache` to save at post-job. It runs
+    # as the runner user and cannot read root-owned /var/cache/apt/archives, so
+    # the staging directory is the only thing it can see. Skipped on an exact
+    # cache hit: nothing new was downloaded, so re-saving would only churn the
+    # entry.
+    - name: Harvest the apt package cache
+      if: inputs.install-deps == 'true' && steps.apt-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        mkdir -p /tmp/apt-archives
+        sudo cp /var/cache/apt/archives/*.deb /tmp/apt-archives/ 2>/dev/null || true
+        sudo chown -R "$(id -u):$(id -g)" /tmp/apt-archives
+        echo "cached $(find /tmp/apt-archives -name '*.deb' | wc -l) .deb package(s) for the next run"
 
     - name: Pre-run
       if: inputs.pre-run != ''
