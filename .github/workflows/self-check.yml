@@ -43,43 +43,12 @@ jobs:
       # workflows — so validate those separately: every action.yml must parse and
       # declare the fields the runner requires.
       - name: Composite actions declare what the runner needs
-        run: |
-          fail=0
-          shopt -s nullglob
-          found=0
-          for f in actions/*/action.yml; do
-            found=$((found + 1))
-            for key in name description runs; do
-              grep -qE "^${key}:" "$f" || { echo "::error file=$f::missing top-level '${key}:'"; fail=1; }
-            done
-            grep -qE "^  using: composite" "$f" || { echo "::error file=$f::runs.using must be 'composite'"; fail=1; }
-            # Every step in a composite action must declare a shell, and the
-            # runner's error for a missing one names no file.
-            awk -v f="$f" '
-              /^    - / { instep=1; hasrun=0; hasshell=0; hasuses=0 }
-              /^      run:/   { hasrun=1 }
-              /^      shell:/ { hasshell=1 }
-              /^      uses:/  { hasuses=1 }
-              /^    - |^$/ {
-                if (instep && hasrun && !hasshell && !hasuses) {
-                  printf "::error file=%s::a run: step is missing shell:\n", f; exit 1
-                }
-              }
-            ' "$f" || fail=1
-          done
-          [ "$found" -eq 0 ] && { echo "::error::no composite actions found — did the layout change?"; fail=1; }
-          echo "checked $found composite action(s)"
-          exit "$fail"
+        run: bash scripts/check-composite-shape.sh
 
       # The README is the consumer-facing contract. If it tells people to pin
       # @main, someone will.
       - name: README pins a tag, never @main
-        run: |
-          if grep -nE "GarrettMakesItLLC/ci[^@]*@main" README.md CLAUDE.md; then
-            echo "::error::docs must pin a version tag, never @main"
-            exit 1
-          fi
-          echo "ok"
+        run: bash scripts/check-doc-pins.sh
 
       - uses: actions/setup-node@v7
         with:
@@ -91,28 +60,7 @@ jobs:
       # known-clean pair that passes. Fixtures live at
       # actions/check-dependency-inventory/fixtures/{pass,fail}.
       - name: check-dependency-inventory fixtures fire correctly
-        run: |
-          # The runner's default shell is `bash -e`; the fail fixture is MEANT to
-          # exit non-zero, so its status has to be captured, not fatal.
-          set +e -uo pipefail
-          script=actions/check-dependency-inventory/check.mjs
-          common=(--doc-path doc.md --manifest-paths "packages/*/package.json" --workspace-prefixes "@fixture-scope/")
-
-          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/pass
-          pass_status=$?
-          if [ "$pass_status" -ne 0 ]; then
-            echo "::error::pass fixture should have exited 0, got $pass_status"
-            exit 1
-          fi
-          echo "pass fixture: OK (exit 0, as expected)"
-
-          node "$script" "${common[@]}" --cwd actions/check-dependency-inventory/fixtures/fail
-          fail_status=$?
-          if [ "$fail_status" -eq 0 ]; then
-            echo "::error::fail fixture should have exited non-zero (undocumented 'chalk'), got 0"
-            exit 1
-          fi
-          echo "fail fixture: OK (exit $fail_status, as expected)"
+        run: bash scripts/check-dependency-inventory-fixtures.sh
 
   # Proves post-deploy-probe.yml's failure path actually fires, not just that
   # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
