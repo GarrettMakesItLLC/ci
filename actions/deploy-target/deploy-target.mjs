@@ -37,14 +37,14 @@ function matchesAny(path, prefixes) {
 
 /**
  * @param {{
- *   vercelEnv?: string,
- *   gitRef?: string,
+ *   vercelEnv?: string | undefined,
+ *   gitRef?: string | undefined,
  *   changedPaths?: string[] | null,
  *   pathPrefixes?: string[],
  *   alwaysBuildRefs?: string[],
  *   alwaysBuildRefPrefixes?: string[],
  *   forceSkip?: boolean,
- *   forceSkipReason?: string,
+ *   forceSkipReason?: string | undefined,
  * }} [opts]
  * @returns {{ build: boolean, reason: string }}
  */
@@ -100,6 +100,11 @@ export function deployDecision({
 
 // --- CLI, used only by action.yml's `run:` step -----------------------
 
+/**
+ * @param {string | undefined} value
+ * @param {string} sep
+ * @returns {string[]}
+ */
 function splitList(value, sep) {
   return (value ?? '')
     .split(sep)

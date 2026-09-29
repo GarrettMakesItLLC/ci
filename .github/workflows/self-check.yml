@@ -67,6 +67,9 @@ jobs:
       - name: next-release-tag fixtures
         run: bash scripts/next-release-tag.test.sh
 
+      - name: run-composite harness env
+        run: bash scripts/run-composite.test.sh
+
   # Proves post-deploy-probe.yml's failure path actually fires, not just that
   # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
   # block, but says nothing about whether the probe logic itself detects a

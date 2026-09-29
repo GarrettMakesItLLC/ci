@@ -12,7 +12,7 @@ a runner, not just the script called directly.
 
 Supported: `${{ inputs.X }}`, `${{ github.action_path }}`, `${{ github.* }}` from
 GITHUB_* env vars, `${{ steps.<id>.outputs.<k> }}` in outputs, step `env:`,
-`shell: bash`, and GITHUB_OUTPUT. Anything else — a nested `uses:` step, an `if:`,
+`shell: bash`, GITHUB_OUTPUT, and GITHUB_WORKSPACE (defaulting to the cwd). Anything else — a nested `uses:` step, an `if:`,
 another shell, an unknown expression — exits 2, so an unsupported action reads as
 a harness failure, never as a pass.
 """
@@ -111,6 +111,9 @@ def run(action_dir, given):
                 tempfile.NamedTemporaryFile("w", delete=False) as of:
             sf.write(script)
         env["GITHUB_OUTPUT"] = of.name
+        # A hosted runner sets this before any step runs; an action reading it
+        # under `set -u` would otherwise fail here looking like its own defect.
+        env.setdefault("GITHUB_WORKSPACE", os.getcwd())
         env["GITHUB_ACTION_PATH"] = action_path
         # The runner's own invocation for `shell: bash`.
         rc = subprocess.call(["bash", "--noprofile", "--norc", "-eo", "pipefail", sf.name], env=env)

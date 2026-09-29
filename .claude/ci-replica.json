@@ -17,7 +17,8 @@
         "bash scripts/check-composite-shape.sh",
         "bash scripts/check-doc-pins.sh",
         "bash scripts/check-dependency-inventory-fixtures.sh",
-        "bash scripts/next-release-tag.test.sh"
+        "bash scripts/next-release-tag.test.sh",
+        "bash scripts/run-composite.test.sh"
       ]
     },
     {
