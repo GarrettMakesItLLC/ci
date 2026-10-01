@@ -23,15 +23,27 @@ dedupe_marker() {
   echo "<!-- file-failure-issue:key=$key -->"
 }
 
+# The marker is preferred, and an exact title match under the same label is
+# the fallback. An issue filed before the marker existed carries none, and so
+# does one whose body was rewritten by hand (a triage pass adding an owner
+# section is the common case). Matching on the marker alone files a fresh
+# duplicate beside that issue on every recurrence, while the original keeps
+# the history and the owner action. `--paginate` runs `--jq` once per page, so
+# each page emits tagged candidates and the choice is made over all of them.
 find_existing_issue() {
-  local label="$1" marker="$2"
-  MARKER="$marker" gh api "repos/$GITHUB_REPOSITORY/issues" \
+  local label="$1" marker="$2" title="$3"
+  local candidates
+  candidates="$(MARKER="$marker" MATCH_TITLE="$title" gh api "repos/$GITHUB_REPOSITORY/issues" \
     -X GET \
     -f state=open \
     -f labels="$label" \
     -f per_page=100 \
     --paginate \
-    --jq '[.[] | select(.pull_request == null) | select(.body != null) | select(.body | contains(env.MARKER))] | first | .number // empty'
+    --jq '.[] | select(.pull_request == null) | if ((.body // "") | contains(env.MARKER)) then "marker \(.number)" elif .title == env.MATCH_TITLE then "title \(.number)" else empty end')"
+  local by_marker by_title
+  by_marker="$(printf '%s\n' "$candidates" | awk '$1 == "marker" { print $2; exit }')"
+  by_title="$(printf '%s\n' "$candidates" | awk '$1 == "title" { print $2; exit }')"
+  echo "${by_marker:-$by_title}"
 }
 
 # Defaults to the first entry of LABELS, so a caller that leads with a

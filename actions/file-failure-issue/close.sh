@@ -19,7 +19,7 @@ source "$dir/lib.sh"
 
 label="$(resolve_dedupe_label "$LABELS" "$DEDUPE_LABEL")"
 marker="$(dedupe_marker "$TITLE" "${DEDUPE_KEY:-}")"
-existing="$(find_existing_issue "$label" "$marker")"
+existing="$(find_existing_issue "$label" "$marker" "$TITLE")"
 
 if [ -z "$existing" ]; then
   echo "number=" >>"$GITHUB_OUTPUT"
