@@ -1,7 +1,7 @@
 {
-  "mode": "degraded",
+  "mode": "normal",
   "issue": "GarrettMakesItLLC/ci#82",
   "authorized_by": "garrett",
-  "since": "2026-09-24",
+  "since": "2026-10-01",
   "owedVerdicts": ".claude/owed-verdicts.json"
 }

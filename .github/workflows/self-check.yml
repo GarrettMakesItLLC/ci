@@ -94,20 +94,17 @@ jobs:
     permissions:
       contents: read
       issues: write
-    # Expected to fail: the URL only ever answers 200, so asserting 599
-    # proves the status-mismatch path actually goes red rather than
-    # silently passing everything. `continue-on-error` is not a supported key
-    # on a job that calls a reusable workflow — GitHub then reads the whole
-    # job as an ordinary one missing `runs-on` and rejects `uses`/`with` as
-    # unexpected. Unneeded anyway: probe-fixture-check already runs `if:
-    # always()` and reads this job's `.result`, so a normal failure here
-    # doesn't block it.
+    # The URL only ever answers 200, so asserting 599 proves the
+    # status-mismatch path reports failure rather than passing everything.
+    # `fail-run: false` keeps the job green so every Self check run on main is
+    # not red by design; probe-fixture-check asserts the `result` output.
     uses: ./.github/workflows/post-deploy-probe.yml
     with:
       probes: |
         [{"url": "https://raw.githubusercontent.com/github/gitignore/main/README.md", "expected_status": 599}]
       issue-title: 'post-deploy-probe self-check fixture (bad) — never filed'
       dry-run: true
+      fail-run: false
 
   probe-fixture-check:
     name: post-deploy-probe gate fires on defect
@@ -119,16 +116,22 @@ jobs:
       - name: Known-good passed and known-bad failed
         env:
           GOOD: ${{ needs.probe-fixture-good.result }}
+          GOOD_RESULT: ${{ needs.probe-fixture-good.outputs.result }}
           BAD: ${{ needs.probe-fixture-bad.result }}
+          BAD_RESULT: ${{ needs.probe-fixture-bad.outputs.result }}
         run: |
-          echo "known-good: $GOOD, known-bad: $BAD"
+          echo "known-good: job $GOOD, result $GOOD_RESULT; known-bad: job $BAD, result $BAD_RESULT"
           fail=0
-          if [ "$GOOD" != "success" ]; then
-            echo "::error::the known-good fixture should have passed but was $GOOD"
+          if [ "$GOOD" != "success" ] || [ "$GOOD_RESULT" != "success" ]; then
+            echo "::error::the known-good fixture should have passed but was job=$GOOD result=$GOOD_RESULT"
             fail=1
           fi
-          if [ "$BAD" != "failure" ]; then
-            echo "::error::the known-bad fixture should have failed but was $BAD — the probe's failure detection is not firing"
+          if [ "$BAD_RESULT" != "failure" ]; then
+            echo "::error::the known-bad fixture should have reported failure but was $BAD_RESULT — the probe's failure detection is not firing"
+            fail=1
+          fi
+          if [ "$BAD" != "success" ]; then
+            echo "::error::the known-bad fixture's job should stay green with fail-run: false but was $BAD"
             fail=1
           fi
           exit "$fail"
@@ -351,7 +354,7 @@ jobs:
     name: v1 covers main
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -365,7 +368,19 @@ jobs:
           }
           # Only the surface a consumer actually runs counts. A README or
           # CLAUDE.md edit reaches nobody downstream and must not redden this.
-          drift="$(git diff --name-only v1 origin/main -- .github/workflows actions)"
+          # release.yml moves v1 on the same push, after this commit's lint
+          # passes, so a fresh push is behind for a few minutes by design.
+          # Wait as long as release.yml waits for lint before calling it drift.
+          attempts=40
+          if git log -1 --pretty=%B | grep -qF '[no-release]'; then attempts=1; fi
+          for attempt in $(seq 1 "$attempts"); do
+            git fetch --quiet --force origin 'refs/tags/v1:refs/tags/v1'
+            drift="$(git diff --name-only v1 origin/main -- .github/workflows actions)"
+            [ -z "$drift" ] && break
+            [ "$attempt" -lt "$attempts" ] || break
+            echo "attempt ${attempt}: v1 behind main, waiting for Release"
+            sleep 15
+          done
           if [ -n "$drift" ]; then
             echo "::error::v1 is behind main; these run in consumers only once the tag moves:"
             printf '%s\n' "$drift"
