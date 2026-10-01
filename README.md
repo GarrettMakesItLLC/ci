@@ -302,7 +302,9 @@ window before counting as failed.
 
 Set `dry-run: true` to compute pass/fail without filing or closing a real issue — used by this repo's
 own `self-check.yml` to prove the failure path fires on a known-bad fixture without spamming an issue
-against `GarrettMakesItLLC/ci` on every PR.
+against `GarrettMakesItLLC/ci` on every PR. That fixture also sets `fail-run: false` (default `true`),
+which keeps the job green when a probe fails and leaves the verdict in the `result` output
+(`success` / `failure`), so the self-check run itself is not red by design.
 
 ### Repos running a merge queue: one check, both events
 

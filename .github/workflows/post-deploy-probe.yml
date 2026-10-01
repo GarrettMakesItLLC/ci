@@ -93,6 +93,14 @@ on:
         required: false
         type: boolean
         default: false
+      fail-run:
+        description: >
+          Fail the job when a probe fails. A fixture that asserts the failure
+          path sets this false and reads the `result` output instead, so the
+          caller's run is not red by design.
+        required: false
+        type: boolean
+        default: true
     secrets:
       token:
         description: Token with issues:write. Required unless dry-run is true.
@@ -286,5 +294,5 @@ jobs:
       # The probe's own verdict is the job's verdict — reported after the
       # issue is filed, so a red run never skips the filing.
       - name: Fail the run when a probe failed
-        if: steps.probe.outputs.result == 'failure'
+        if: steps.probe.outputs.result == 'failure' && inputs.fail-run
         run: exit 1

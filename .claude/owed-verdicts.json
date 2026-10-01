@@ -9,17 +9,29 @@
       "id": "self-check-on-actions",
       "verdict": "One self-check.yml run of main on Actions: actionlint as raven-actions runs it, the post-deploy-probe fixtures, and every fixture job through the real runner.",
       "why": "The replica cannot run a reusable workflow, so probe-fixture-good/bad are NOT-RUN in every window report, and run-composite.py is a model of the runner rather than the runner.",
-      "owedFor": ["main during the window"],
+      "owedFor": [
+        "main during the window"
+      ],
       "howToPay": "Actions → Self check → Run workflow on main. Record the run URL, the SHA and its conclusion.",
-      "paid": null
+      "paid": {
+        "run": "https://github.com/GarrettMakesItLLC/ci/actions/runs/36801031560",
+        "sha": "main@4d03556378e6",
+        "result": "red, attributed: every lint/fixture job passed except two defects in the self-check itself — the known-bad probe fixture made every run red by design, and `v1 covers main` raced the same push's Release. Both fixed by the PR that records this payment."
+      }
     },
     {
       "id": "v1-release",
       "verdict": "The release.yml run that moves v1 over every change merged to main during the window, then one consumer PR per changed action proving it on that consumer's CI.",
       "why": "Consumers pin @v1, so a window merge reaches nobody until the tag moves, and the repo's own rule is that a tag moves only once a real consumer has run the commit.",
-      "owedFor": ["actions/ and .github/workflows/ changes merged during the window"],
+      "owedFor": [
+        "actions/ and .github/workflows/ changes merged during the window"
+      ],
       "howToPay": "Point one consumer's workflow at main's SHA in a PR and let its CI run; once green, run Release. Record both run URLs, then run the v1-current job.",
-      "paid": null
+      "paid": {
+        "run": "https://github.com/GarrettMakesItLLC/ci/actions/runs/36801031383 (Release moved v1 to 4d03556); consumer on v1: https://github.com/GarrettMakesItLLC/RedThreadEvents/actions/runs/36813186073",
+        "sha": "main@4d03556378e6",
+        "result": "green: v1 == main, and a consumer's issue-status-clear.yml@v1 run succeeded against it"
+      }
     }
   ]
 }
