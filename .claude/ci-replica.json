@@ -42,11 +42,23 @@
       ]
     },
     {
+      "name": "cwv-judge-fixtures",
+      "$mirrors": "self-check.yml `cwv-judge-fixtures`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "bash scripts/cwv-judge.test.sh",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/regression/tonight.json --input history-dir=.github/fixtures/cwv-judge/regression --expect fail",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/single-night-spike/tonight.json --input history-dir=.github/fixtures/cwv-judge/single-night-spike --expect-output verdict=clean",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/under-floor/tonight.json --input history-dir=.github/fixtures/cwv-judge/under-floor --expect-output verdict=clean",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/cold-start/tonight.json --input history-dir=.github/fixtures/cwv-judge/cold-start --expect-output verdict=insufficient-history"
+      ]
+    },
+    {
       "name": "pr-body-lint-fixtures",
       "$mirrors": "self-check.yml `pr-body-lint-fixtures`, through the real action.yml",
       "budgetSeconds": 60,
       "commands": [
-        "scripts/run-composite.py actions/pr-body-lint --input 'body=Does not close #4885 — the recapture itself is still owed.' --expect fail",
+        "scripts/run-composite.py actions/pr-body-lint --input 'body=Does not close #4885 \u2014 the recapture itself is still owed.' --expect fail",
         "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #4879, #4885' --expect fail",
         "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #12'",
         "scripts/run-composite.py actions/pr-body-lint --input 'body=Closes #12, Closes #34'"

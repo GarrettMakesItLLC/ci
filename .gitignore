@@ -1,1 +1,3 @@
 .ci-replica/
+actions/cwv-measure/node_modules/
+actions/cwv-measure/package-lock.json

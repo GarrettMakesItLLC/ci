@@ -224,6 +224,74 @@ jobs:
         with:
           workflow-dir: actions
 
+  cwv-judge-fixtures:
+    name: cwv-judge fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Unit-level: the persistence rule itself, including the cases that must
+      # NOT fire — a single loud night, a big ratio under the floor, a window
+      # with a gap.
+      - name: Persistence rule cases
+        run: bash scripts/cwv-judge.test.sh
+
+      # A rise held for three nights over its floor must fail. This is the
+      # gate's only reason to exist, so it is asserted through the real
+      # `uses:` path.
+      - name: Held regression must fail
+        id: regression
+        continue-on-error: true
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/regression/tonight.json
+          history-dir: .github/fixtures/cwv-judge/regression
+
+      - name: Assert the held regression failed
+        env:
+          OUTCOME: ${{ steps.regression.outcome }}
+          VERDICT: ${{ steps.regression.outputs.verdict }}
+        run: |
+          if [ "$OUTCOME" != "failure" ] || [ "$VERDICT" != "regression" ]; then
+            echo "::error::cwv-judge passed a rise that held three nights over its floor (outcome=$OUTCOME verdict=$VERDICT) — the gate is not firing"
+            exit 1
+          fi
+
+      - name: Single loud night must pass
+        id: spike
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/single-night-spike/tonight.json
+          history-dir: .github/fixtures/cwv-judge/single-night-spike
+
+      - name: Rise under the floor must pass
+        id: under_floor
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/under-floor/tonight.json
+          history-dir: .github/fixtures/cwv-judge/under-floor
+
+      # Too little history passes, and must say so rather than read as clean.
+      - name: Cold start must pass open as insufficient-history
+        id: cold
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/cold-start/tonight.json
+          history-dir: .github/fixtures/cwv-judge/cold-start
+
+      - name: Assert the verdicts
+        env:
+          SPIKE: ${{ steps.spike.outputs.verdict }}
+          UNDER: ${{ steps.under_floor.outputs.verdict }}
+          COLD: ${{ steps.cold.outputs.verdict }}
+        run: |
+          fail=0
+          [ "$SPIKE" = "clean" ] || { echo "::error::single-night spike verdict was '$SPIKE', expected clean"; fail=1; }
+          [ "$UNDER" = "clean" ] || { echo "::error::under-floor verdict was '$UNDER', expected clean"; fail=1; }
+          [ "$COLD" = "insufficient-history" ] || { echo "::error::cold-start verdict was '$COLD', expected insufficient-history — a gate that read nothing is reading as clean"; fail=1; }
+          exit "$fail"
+
   pr-body-lint-fixtures:
     name: pr-body-lint catches its traps
     # actions/pr-body-lint has no test suite of its own (this repo has none),

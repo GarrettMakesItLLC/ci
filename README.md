@@ -21,10 +21,13 @@ identical across them.
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
 | `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
 | `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
+| `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). Measures, never judges. |
+| `actions/cwv-judge` | composite | Fail only on a Core Web Vitals regression that **holds across nights** — over the floor and over a rise factor against the rolling median for N consecutive nights. Too little history passes open and says `insufficient-history`. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
 | `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
 | `.github/workflows/post-deploy-probe.yml` | reusable | Probe a URL set, assert status/headers/body, file an issue on failure. |
+| `.github/workflows/nightly-cwv.yml` | reusable | Nightly LCP / TBT / CLS over a product's prerendered routes (build, serve, `cwv-measure`, `cwv-judge`, rolling history, failure issue). |
 
 ## Why almost everything here is a composite action
 
@@ -305,6 +308,83 @@ own `self-check.yml` to prove the failure path fires on a known-bad fixture with
 against `GarrettMakesItLLC/ci` on every PR. That fixture also sets `fail-run: false` (default `true`),
 which keeps the job green when a probe fails and leaves the verdict in the `result` output
 (`success` / `failure`), so the self-check run itself is not red by design.
+
+### `nightly-cwv.yml`: nightly Core Web Vitals, failing only on a persistent regression
+
+```yaml
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  cwv:
+    uses: GarrettMakesItLLC/ci/.github/workflows/nightly-cwv.yml@v1
+    with:
+      build-command: npm run build --workspace=apps/web
+      serve-command: npm run preview --workspace=apps/web -- --port 4173 --strictPort
+      routes: |
+        /
+        /pricing
+        /blog
+    secrets: inherit
+```
+
+Build the app **with prerender**: a preview that answers a marketing route with the client-rendered
+shell measures a page production never serves. `serve-command` must bind `base-url` strictly (no
+fallback port), or the sweep measures whatever else answers there. Leave `serve-command` empty and
+set `base-url` to measure a preview deployment instead.
+
+**Why a night does not gate.** A lab run on a shared runner is noisy: the same unchanged build lands
+on both sides of a threshold on different nights, TBT worst of all. That noise does not hold; a
+regression does. So `cwv-judge` fails a route/metric only when tonight and the `sustain-nights - 1`
+nights before it were each **over the floor and over `rise` × the median of the `baseline-nights`
+before that night**. Both halves matter: without the ratio the gate is a coin flip at the floor,
+without the floor a 15 ms → 40 ms TBT "regression" fails a route nobody calls slow. A loud single
+night is reported (table, `::warning`, step summary), never failed.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `baseline-nights` / `sustain-nights` | `7` / `3` | Median window, and consecutive elevated nights before failing. |
+| `lcp-floor-ms` / `lcp-rise` | `2500` / `1.1` | LCP is the steadiest metric, so its factor is the tightest. |
+| `tbt-floor-ms` / `tbt-rise` | `200` / `1.5` | TBT is summed from the runner's own main-thread tasks, so it is the noisiest. |
+| `cls-floor` / `cls-rise` | `0.1` / `1.5` | |
+| `runs` | `5` | Lighthouse runs per route; the median is kept. |
+
+The defaults come from the MuscleBuddy lane's recorded history; tune them against your own routes'
+nights, not by guessing.
+
+**State across nights** is one workflow artifact (`history-artifact`, default `cwv-history`) holding
+the last 30 night records, scoped to the ref that ran. Each night downloads it, judges against it,
+appends tonight (green or red — a ledger of only the good nights proves nothing was slow) and
+re-uploads it, which also refreshes its retention (`history-retention-days`, default 30). Give each
+route set its own `history-artifact` name. The judge needs `actions: read`, which the workflow
+declares. A lane that skips longer than the retention restarts cold.
+
+**Not enough history fails open, loudly.** The gate reads `baseline-nights + sustain-nights - 1`
+prior nights (9 by default) for each route; with fewer, the verdict is `insufficient-history` — a
+`::warning`, a table row per metric, and a pass. A gate that read nothing must not look like a gate
+that read a week and found nothing. It detects a step change, not an absolute level: a regression
+already filling the baseline goes quiet, while the per-night table keeps reporting the level.
+
+**A rig failure is not a finding.** A build, server or Lighthouse that dies before any route is
+measured gives verdict `unjudged` and a failed lane whose issue says no verdict was produced. A route
+that cannot be measured is listed UNMEASURED and does not stop the others.
+
+**Lab numbers, not field numbers.** This measures a GitHub runner under simulated throttling. It buys
+the trend and regression detection against a fixed rig, not figures comparable to PageSpeed
+Insights or real users. INP is not measured (a lab run has nobody interacting; TBT is its proxy).
+Lighthouse models HTTP/1.1's six-connection cap, so a server speaking HTTP/1.1 (such as `vite
+preview`) over-charges a page with many modulepreloaded chunks relative to production's HTTP/2. The
+trend is still valid against itself; for absolute fidelity measure an HTTP/2 URL.
+
+On failure the lane files (or updates) one issue titled `issue-title` and closes it with a comment on
+the next `clean` night, through `file-failure-issue`.
+
+A caller whose lane already builds and serves the app can use the pieces directly:
+`cwv-measure` (`base-url`, `routes`) → `cwv-judge` (`measurements-file`, `history-artifact`), then
+upload the directory in `cwv-judge`'s `history-dir` output as the history artifact with
+`overwrite: true`.
 
 ### Repos running a merge queue: one check, both events
 
