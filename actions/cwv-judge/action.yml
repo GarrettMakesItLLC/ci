@@ -1,0 +1,91 @@
+name: Judge Core Web Vitals
+description: >
+  Fail only on a Core Web Vitals regression that holds across nights. Reads a
+  night record from `cwv-measure`, compares it with the prior nights kept in a
+  history artifact, and fails when LCP, TBT or CLS on a route has been both over
+  its floor and over its rise factor against the rolling-median baseline for N
+  consecutive nights. One loud night is reported, never failed. Too little
+  history passes open and says so (`insufficient-history`). Needs `actions: read`
+  and a token for `gh` unless `history-dir` is given.
+
+inputs:
+  measurements-file:
+    description: Night record written by `cwv-measure`.
+    required: true
+  history-artifact:
+    description: >
+      Name of the artifact holding the rolling history (`history.json`). Give each
+      route set its own name so nights are only judged against the same routes.
+    required: false
+    default: cwv-history
+  history-dir:
+    description: >
+      Read `history.json` from this directory instead of the artifact API. Used by
+      fixtures and local runs; leave empty in a real lane.
+    required: false
+    default: ''
+  baseline-nights:
+    description: Nights whose median is the baseline.
+    required: false
+    default: '7'
+  sustain-nights:
+    description: Consecutive elevated nights, tonight included, before the gate fires.
+    required: false
+    default: '3'
+  lcp-floor-ms:
+    description: A night is only elevated when LCP is over this.
+    required: false
+    default: '2500'
+  lcp-rise:
+    description: ...and over this multiple of the baseline.
+    required: false
+    default: '1.1'
+  tbt-floor-ms:
+    description: TBT floor (Lighthouse's own "good" boundary).
+    required: false
+    default: '200'
+  tbt-rise:
+    description: TBT is the noisiest metric on a shared runner, so its rise factor is the widest.
+    required: false
+    default: '1.5'
+  cls-floor:
+    description: CLS floor.
+    required: false
+    default: '0.1'
+  cls-rise:
+    description: CLS rise factor.
+    required: false
+    default: '1.5'
+  token:
+    description: "Token for the history artifact API (`actions: read`); defaults to the workflow's GITHUB_TOKEN."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  verdict:
+    description: '`clean`, `regression`, `insufficient-history` or `unjudged` (nothing measured).'
+    value: ${{ steps.judge.outputs.verdict }}
+  history-dir:
+    description: Directory holding the updated `history.json` (tonight appended) and `report.md`. Upload it as the history artifact.
+    value: ${{ steps.judge.outputs.history-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Judge
+      id: judge
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        CWV_MEASUREMENTS_FILE: ${{ inputs.measurements-file }}
+        CWV_HISTORY_ARTIFACT: ${{ inputs.history-artifact }}
+        CWV_HISTORY_DIR: ${{ inputs.history-dir }}
+        CWV_BASELINE_NIGHTS: ${{ inputs.baseline-nights }}
+        CWV_SUSTAIN_NIGHTS: ${{ inputs.sustain-nights }}
+        CWV_LCP_FLOOR_MS: ${{ inputs.lcp-floor-ms }}
+        CWV_LCP_RISE: ${{ inputs.lcp-rise }}
+        CWV_TBT_FLOOR_MS: ${{ inputs.tbt-floor-ms }}
+        CWV_TBT_RISE: ${{ inputs.tbt-rise }}
+        CWV_CLS_FLOOR: ${{ inputs.cls-floor }}
+        CWV_CLS_RISE: ${{ inputs.cls-rise }}
+      run: node "${{ github.action_path }}/judge.mjs"

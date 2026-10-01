@@ -1,0 +1,61 @@
+name: Measure Core Web Vitals
+description: >
+  Run a pinned local Lighthouse over a list of routes served at a base URL and
+  write one night's LCP / TBT / CLS record (median of N runs per route). It
+  measures and never judges — `cwv-judge` decides whether a rise persisted. The
+  caller builds and serves the app first, and needs Chrome on the runner
+  (preinstalled on ubuntu-24.04).
+
+inputs:
+  base-url:
+    description: Origin the routes are served from, e.g. `http://127.0.0.1:4173`. Prefer a server that speaks HTTP/2 — see the README.
+    required: true
+  routes:
+    description: Newline- or comma-separated route paths (each starting with `/`). Blank lines and `#` comments are ignored.
+    required: true
+  output-file:
+    description: Where to write the night record.
+    required: false
+    default: ''
+  runs:
+    description: Lighthouse runs per route; the median is kept. Five is Lighthouse's own guidance for a noisy metric like TBT.
+    required: false
+    default: '5'
+  form-factor:
+    description: '`mobile` (Lighthouse default throttling) or `desktop`.'
+    required: false
+    default: mobile
+  chrome-path:
+    description: Chrome/Chromium binary. Empty lets chrome-launcher find the runner's own.
+    required: false
+    default: ''
+
+outputs:
+  measurements-file:
+    description: Path of the night record written (JSON; feed it to `cwv-judge`).
+    value: ${{ steps.measure.outputs.file }}
+
+runs:
+  using: composite
+  steps:
+    # Lighthouse is pinned in this action's own package.json: a lab number is
+    # only comparable across nights on the same Lighthouse, and a consumer
+    # repo's lockfile is not ours to edit.
+    - name: Install the pinned Lighthouse
+      shell: bash
+      run: npm install --omit=dev --no-audit --no-fund --prefix "${{ github.action_path }}"
+
+    - name: Measure
+      id: measure
+      shell: bash
+      env:
+        CWV_BASE_URL: ${{ inputs.base-url }}
+        CWV_ROUTES: ${{ inputs.routes }}
+        CWV_RUNS: ${{ inputs.runs }}
+        CWV_FORM_FACTOR: ${{ inputs.form-factor }}
+        CWV_CHROME_PATH: ${{ inputs.chrome-path }}
+        CWV_OUT_INPUT: ${{ inputs.output-file }}
+      run: |
+        out="${CWV_OUT_INPUT:-${RUNNER_TEMP:-/tmp}/cwv/measurements.json}"
+        CWV_OUT="$out" node "${{ github.action_path }}/measure.mjs"
+        echo "file=$out" >> "$GITHUB_OUTPUT"

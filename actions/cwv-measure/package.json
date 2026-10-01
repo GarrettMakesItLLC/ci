@@ -1,0 +1,10 @@
+{
+  "name": "cwv-measure",
+  "private": true,
+  "type": "module",
+  "description": "Pinned Lighthouse for the cwv-measure composite action. Exact versions: a lab number is only comparable across nights on the same Lighthouse.",
+  "dependencies": {
+    "chrome-launcher": "1.2.1",
+    "lighthouse": "13.4.1"
+  }
+}

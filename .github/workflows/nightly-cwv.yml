@@ -1,0 +1,288 @@
+name: Nightly Core Web Vitals
+
+# A nightly lane that measures LCP / TBT / CLS over a product's prerendered
+# marketing routes with a local Lighthouse, and fails only on a regression that
+# HOLDS across nights. One loud night on a noisy shared runner is reported, never
+# failed — see actions/cwv-judge/judge.mjs for the rule and why.
+#
+# It is a reusable workflow rather than a composite because it owns a whole
+# job: build, serve, a long Lighthouse sweep and a failure issue. The pieces
+# are composites (`cwv-measure`, `cwv-judge`) for a caller whose lane already
+# builds the app and wants only the measuring and judging.
+#
+# Called as:
+#
+#   on:
+#     schedule:
+#       - cron: '17 3 * * *'
+#     workflow_dispatch:
+#
+#   jobs:
+#     cwv:
+#       uses: GarrettMakesItLLC/ci/.github/workflows/nightly-cwv.yml@v1
+#       with:
+#         build-command: npm run build --workspace=apps/web
+#         serve-command: npm run preview --workspace=apps/web -- --port 4173 --strictPort
+#         routes: |
+#           /
+#           /pricing
+#           /blog
+#       secrets: inherit
+#
+# The rolling history lives in a workflow artifact on the ref that ran, so a
+# manual run from a branch builds its own history instead of polluting the
+# default branch's. Artifacts expire; a lane that skips longer than
+# `history-retention-days` restarts cold and says `insufficient-history`.
+
+on:
+  workflow_call:
+    inputs:
+      routes:
+        description: Newline- or comma-separated route paths to measure, each starting with `/`.
+        required: true
+        type: string
+      build-command:
+        description: Shell command that builds the app. Empty skips the build.
+        required: false
+        type: string
+        default: ''
+      serve-command:
+        description: >
+          Shell command that serves the build, run in the background. It must
+          bind the host/port in `base-url` and must not fall back to another
+          port. Empty measures `base-url` as-is (a preview deployment, say).
+        required: false
+        type: string
+        default: ''
+      base-url:
+        description: Origin the routes are measured at.
+        required: false
+        type: string
+        default: http://127.0.0.1:4173
+      ready-path:
+        description: Path polled on `base-url` until it answers 2xx, before measuring.
+        required: false
+        type: string
+        default: /
+      working-directory:
+        description: Directory the build and serve commands run in.
+        required: false
+        type: string
+        default: .
+      node-version:
+        description: Node major for the app's build.
+        required: false
+        type: string
+        default: '24'
+      package-manager:
+        description: npm or pnpm.
+        required: false
+        type: string
+        default: npm
+      runs:
+        description: Lighthouse runs per route; the median is kept.
+        required: false
+        type: number
+        default: 5
+      form-factor:
+        description: '`mobile` or `desktop`.'
+        required: false
+        type: string
+        default: mobile
+      history-artifact:
+        description: Name of the rolling-history artifact. Use a distinct name per route set.
+        required: false
+        type: string
+        default: cwv-history
+      history-retention-days:
+        description: Days the history artifact is kept (1-90). Refreshed every night the lane runs.
+        required: false
+        type: number
+        default: 30
+      baseline-nights:
+        required: false
+        type: number
+        default: 7
+      sustain-nights:
+        description: Consecutive elevated nights before the lane fails.
+        required: false
+        type: number
+        default: 3
+      lcp-floor-ms:
+        required: false
+        type: number
+        default: 2500
+      lcp-rise:
+        required: false
+        type: number
+        default: 1.1
+      tbt-floor-ms:
+        required: false
+        type: number
+        default: 200
+      tbt-rise:
+        required: false
+        type: number
+        default: 1.5
+      cls-floor:
+        required: false
+        type: number
+        default: 0.1
+      cls-rise:
+        required: false
+        type: number
+        default: 1.5
+      issue-title:
+        description: Title for the failure issue. Also the dedupe key — keep it stable across runs.
+        required: false
+        type: string
+        default: Nightly Core Web Vitals lane is failing
+      issue-labels:
+        description: Comma-separated labels for the filed issue. The first label is also the dedupe scope.
+        required: false
+        type: string
+        default: 'ci-failure,type:bug,status:ready,source:agent'
+      timeout-minutes:
+        description: Cap on the whole job — routes x runs of a throttled Lighthouse pass is slow, and a cap turns a wedged run into a legible failure.
+        required: false
+        type: number
+        default: 45
+    secrets:
+      token:
+        description: Token with issues:write for the failure issue. Falls back to the workflow's GITHUB_TOKEN.
+        required: false
+    outputs:
+      verdict:
+        description: '`clean`, `regression`, `insufficient-history` or `unjudged`.'
+        value: ${{ jobs.cwv.outputs.verdict }}
+
+permissions:
+  contents: read
+
+jobs:
+  cwv:
+    name: Core Web Vitals
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      # Reads the history artifact (the artifact listing API).
+      actions: read
+      issues: write
+    outputs:
+      verdict: ${{ steps.judge.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@v1
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager: ${{ inputs.package-manager }}
+
+      - name: Build
+        if: inputs.build-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -c "$BUILD_COMMAND"
+
+      - name: Serve
+        if: inputs.serve-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SERVE_COMMAND: ${{ inputs.serve-command }}
+        # A server that never bound is a rig failure, not a finding, and must
+        # fail here — before a single route is measured against whatever else
+        # happens to answer on the port.
+        run: |
+          nohup bash -c "$SERVE_COMMAND" >"${RUNNER_TEMP}/cwv-serve.log" 2>&1 &
+          echo "serve pid $!"
+
+      - name: Wait for the app
+        env:
+          READY_URL: ${{ inputs.base-url }}${{ inputs.ready-path }}
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -sf -o /dev/null "$READY_URL"; then exit 0; fi
+            sleep 1
+          done
+          echo "::error title=Core Web Vitals rig::$READY_URL never answered 2xx"
+          cat "${RUNNER_TEMP}/cwv-serve.log" 2>/dev/null || true
+          exit 1
+
+      - name: Measure
+        id: measure
+        uses: GarrettMakesItLLC/ci/actions/cwv-measure@v1
+        with:
+          base-url: ${{ inputs.base-url }}
+          routes: ${{ inputs.routes }}
+          runs: ${{ inputs.runs }}
+          form-factor: ${{ inputs.form-factor }}
+
+      # Not `if: always()`: a cancelled run must not be judged. A measure step
+      # that failed leaves no file, which the judge reports as `unjudged`.
+      - name: Judge
+        id: judge
+        if: ${{ !cancelled() }}
+        uses: GarrettMakesItLLC/ci/actions/cwv-judge@v1
+        with:
+          measurements-file: ${{ steps.measure.outputs.measurements-file }}
+          history-artifact: ${{ inputs.history-artifact }}
+          baseline-nights: ${{ inputs.baseline-nights }}
+          sustain-nights: ${{ inputs.sustain-nights }}
+          lcp-floor-ms: ${{ inputs.lcp-floor-ms }}
+          lcp-rise: ${{ inputs.lcp-rise }}
+          tbt-floor-ms: ${{ inputs.tbt-floor-ms }}
+          tbt-rise: ${{ inputs.tbt-rise }}
+          cls-floor: ${{ inputs.cls-floor }}
+          cls-rise: ${{ inputs.cls-rise }}
+
+      # Green or red: a ledger of only the good nights would prove nothing was
+      # ever slow. `overwrite` replaces last night's copy, which this one
+      # contains.
+      - name: Publish tonight to the history
+        if: ${{ !cancelled() && steps.judge.outputs.history-dir != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.history-artifact }}
+          path: ${{ steps.judge.outputs.history-dir }}
+          overwrite: true
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.history-retention-days }}
+
+      - name: Write the failure report
+        if: ${{ !cancelled() && steps.judge.outcome == 'failure' }}
+        env:
+          HISTORY_DIR: ${{ steps.judge.outputs.history-dir }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The nightly Core Web Vitals lane failed."
+            echo
+            if [ -n "$HISTORY_DIR" ] && [ -s "$HISTORY_DIR/report.md" ]; then
+              cat "$HISTORY_DIR/report.md"
+            else
+              echo "It produced no verdict: the build, server or Lighthouse failed before any route was judged. Nothing about the vitals was assessed."
+            fi
+            echo
+            echo "Run: ${RUN_URL}"
+          } >"${RUNNER_TEMP}/cwv-report.md"
+
+      - name: File or update the failure issue
+        if: ${{ !cancelled() && steps.judge.outcome == 'failure' }}
+        uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+        with:
+          title: ${{ inputs.issue-title }}
+          body-file: ${{ runner.temp }}/cwv-report.md
+          labels: ${{ inputs.issue-labels }}
+          token: ${{ secrets.token || github.token }}
+
+      - name: Close the failure issue on recovery
+        if: ${{ steps.judge.outputs.verdict == 'clean' }}
+        uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+        with:
+          mode: close
+          title: ${{ inputs.issue-title }}
+          labels: ${{ inputs.issue-labels }}
+          comment: Resolved — no persistent regression
+          token: ${{ secrets.token || github.token }}
