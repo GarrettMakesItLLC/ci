@@ -149,6 +149,40 @@ jobs:
       - name: Exercise file -> file (dedupe) -> close -> close (no-op)
         run: bash actions/file-failure-issue/fixture-test.sh "the automated check failed"
 
+  check-migration-locks-fixture:
+    name: check-migration-locks fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Both fixtures hold the same pre-cutoff migration with no lock_timeout,
+      # so a passing clean run also proves `since` grandfathers it. The
+      # violating set adds a post-cutoff ALTER TABLE with no lock_timeout; the
+      # clean set adds it with one, plus a new table indexed with no prefix
+      # (exempt: nothing else can hold a lock on it).
+      - name: Fixture with a violation must fail
+        id: violations
+        continue-on-error: true
+        uses: ./actions/check-migration-locks
+        with:
+          since: '20260101000000'
+          migrations-dir: .github/fixtures/check-migration-locks/violations
+
+      - name: Assert the violating fixture failed
+        run: |
+          if [ "${{ steps.violations.outcome }}" != "failure" ]; then
+            echo "::error::check-migration-locks passed a fixture with a known violation — the check is not firing"
+            exit 1
+          fi
+          echo "ok — violating fixture correctly failed"
+
+      - name: Fixture with no violations must pass
+        uses: ./actions/check-migration-locks
+        with:
+          since: '20260101000000'
+          migrations-dir: .github/fixtures/check-migration-locks/clean
+
   check-action-pins-fixture:
     name: check-action-pins fixture
     runs-on: ubuntu-latest
@@ -558,7 +592,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
+    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, check-migration-locks-fixture, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

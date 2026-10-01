@@ -1,0 +1,48 @@
+name: Check migration locks
+description: >
+  Fail when a Prisma migration takes a heavy lock on an existing table without
+  `SET LOCAL lock_timeout` before it, or runs `CREATE INDEX CONCURRENTLY`
+  alongside another statement. Runs dotclaude's `bin/migration-lock-check.py`,
+  the same check its migration-guard hook applies at write time.
+
+inputs:
+  since:
+    description: >
+      14-digit migration timestamp. Migrations whose directory sorts before it
+      are skipped: they are already applied and checksum-locked, so they
+      cannot be fixed in place. Set it to the timestamp of the repo's newest
+      migration when adopting the check.
+    required: true
+  migrations-dir:
+    description: Directory of `<timestamp>_<name>/migration.sql` folders.
+    required: false
+    default: prisma/migrations
+  checker-ref:
+    description: >
+      dotclaude commit the checker is fetched from. A full SHA, so a change
+      to the checker reaches consumers only when this default moves.
+    required: false
+    default: fbff77ba5f44facd37a3d3351f2e66b36511a12c
+
+runs:
+  using: composite
+  steps:
+    - name: Check migration locks
+      shell: bash
+      env:
+        SINCE: ${{ inputs.since }}
+        MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        CHECKER_REF: ${{ inputs.checker-ref }}
+      run: |
+        set -euo pipefail
+        checker="$RUNNER_TEMP/migration-lock-check.py"
+        curl -fsSL --retry 3 -o "$checker" \
+          "https://raw.githubusercontent.com/GarrettMakesItLLC/dotclaude/${CHECKER_REF}/bin/migration-lock-check.py"
+        shopt -s nullglob
+        files=("$MIGRATIONS_DIR"/*/migration.sql)
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "::error::no migrations under $MIGRATIONS_DIR — wrong migrations-dir?"
+          exit 1
+        fi
+        python3 "$checker" --since "$SINCE" "${files[@]}"
+        echo "✓ no lock-rule violations in ${#files[@]} migration(s) (those before $SINCE are grandfathered)"
