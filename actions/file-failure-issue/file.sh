@@ -18,7 +18,7 @@ fi
 
 label="$(resolve_dedupe_label "$LABELS" "$DEDUPE_LABEL")"
 marker="$(dedupe_marker "$TITLE" "${DEDUPE_KEY:-}")"
-existing="$(find_existing_issue "$label" "$marker")"
+existing="$(find_existing_issue "$label" "$marker" "$TITLE")"
 
 if [ -n "$existing" ]; then
   {

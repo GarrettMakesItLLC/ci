@@ -26,10 +26,10 @@ echo '[]' >"$STATE"
 # This mock re-implements gh's built-in --jq evaluation (gh bundles its own
 # jq engine; it does not shell out to a system `jq` binary, so the real
 # action never depends on one being installed). It hardcodes the one query
-# lib.sh actually issues — filter by state, drop PRs, match by marker
-# contained in the body — rather than interpreting the --jq string
-# generically, since that's the only expression this repo's own code
-# produces.
+# lib.sh actually issues — filter by state, drop PRs, tag each issue
+# `marker N` when the body contains the marker, else `title N` when the title
+# matches exactly — rather than interpreting the --jq string generically,
+# since that's the only expression this repo's own code produces.
 FAKE_GH="$WORK/gh"
 cat >"$FAKE_GH" <<'GHEOF'
 #!/usr/bin/env bash
@@ -45,19 +45,19 @@ if [ "$1" = "api" ]; then
       state_filter="${args[$((i + 1))]#state=}"
     fi
   done
-  STATE_FILTER="$state_filter" MARKER="$MARKER" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
+  STATE_FILTER="$state_filter" MARKER="$MARKER" MATCH_TITLE="$MATCH_TITLE" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
 import json, os
 state = json.load(open(os.environ["FIXTURE_STATE"]))
 sf = os.environ["STATE_FILTER"]
 marker = os.environ["MARKER"]
-match = [
-    i for i in state
-    if i["state"] == sf
-    and i.get("pull_request") is None
-    and i.get("body") is not None
-    and marker in i["body"]
-]
-print(match[0]["number"] if match else "")
+title = os.environ["MATCH_TITLE"]
+for i in state:
+    if i["state"] != sf or i.get("pull_request") is not None:
+        continue
+    if marker in (i.get("body") or ""):
+        print(f"marker {i['number']}")
+    elif i.get("title") == title:
+        print(f"title {i['number']}")
 PYEOF
   exit 0
 fi
@@ -181,5 +181,49 @@ assert_state_open_count 1
 echo "== 7. close mode with the same dedupe-key (different title again) -> closes =="
 run_mode close "nightly lane recovered" "" "Fixed" "nightly-lane"
 assert_state_open_count 0
+
+# An issue with no marker: filed before the marker existed, or its body was
+# rewritten by hand. Seeded straight into the state, as GitHub would hold it.
+seed_issue() {
+  TITLE_ARG="$1" BODY_ARG="$2" FIXTURE_STATE="$STATE" python3 - <<'PYEOF'
+import json, os
+path = os.environ["FIXTURE_STATE"]
+state = json.load(open(path))
+num = len(state) + 1
+state.append({"number": num, "title": os.environ["TITLE_ARG"], "state": "open", "pull_request": None, "body": os.environ["BODY_ARG"]})
+json.dump(state, open(path, "w"))
+print(num)
+PYEOF
+}
+
+assert_output_number() {
+  local expected="$1" got
+  got=$(sed -n 's/^number=//p' "$WORK/output")
+  if [ "$got" != "$expected" ]; then
+    echo "FAIL: expected number=$expected, got number=$got"
+    cat "$STATE"
+    exit 1
+  fi
+}
+
+echo "== 8. file mode, open issue with the SAME title but NO marker -> comments on it, no new issue =="
+legacy=$(seed_issue "Spend check did not come back clean" "## Owner action required (rewritten by hand, marker gone)")
+assert_state_open_count 1
+run_mode file "Spend check did not come back clean" "$WORK/body.md"
+assert_output_number "$legacy"
+assert_state_open_count 1
+
+echo "== 9. close mode finds the marker-less issue by title -> closes it =="
+run_mode close "Spend check did not come back clean" "" "Fixed"
+assert_output_number "$legacy"
+assert_state_open_count 0
+
+echo "== 10. a marker match wins over a title match =="
+seed_issue "uptime monitor alerts nobody" "no marker here" >/dev/null
+run_mode file "uptime lane is red" "$WORK/body.md" "" "uptime-lane"
+marked=$(python3 -c "import json,sys; print(max(i['number'] for i in json.load(open(sys.argv[1]))))" "$STATE")
+run_mode file "uptime monitor alerts nobody" "$WORK/body.md" "" "uptime-lane"
+assert_output_number "$marked"
+assert_state_open_count 2
 
 echo "ALL PASSED"
