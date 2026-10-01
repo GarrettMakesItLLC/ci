@@ -42,6 +42,15 @@
       ]
     },
     {
+      "name": "check-migration-locks-fixture",
+      "$mirrors": "self-check.yml `check-migration-locks-fixture`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations --expect fail",
+        "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/clean"
+      ]
+    },
+    {
       "name": "cwv-judge-fixtures",
       "$mirrors": "self-check.yml `cwv-judge-fixtures`, through the real action.yml",
       "budgetSeconds": 60,

@@ -12,6 +12,7 @@ identical across them.
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`). |
+| `actions/check-migration-locks` | composite | Fail a Prisma migration that takes a heavy lock on an existing table without `SET LOCAL lock_timeout`, or runs `CREATE INDEX CONCURRENTLY` beside another statement. `since` grandfathers applied migrations. |
 | `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
