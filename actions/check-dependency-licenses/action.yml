@@ -1,0 +1,59 @@
+name: Check dependency licenses
+description: >
+  Fail when a production dependency's licence is not on an allowlist. Fails
+  closed: an unknown SPDX id, `SEE LICENSE IN ...`, Commons-Clause, BUSL,
+  UNLICENSED or a missing licence is a failure, never a pass. Reads
+  package-lock.json; needs no install.
+
+inputs:
+  lockfile:
+    description: Path to package-lock.json (lockfileVersion 2 or 3).
+    required: false
+    default: package-lock.json
+  workspaces:
+    description: >
+      Comma-separated lockfile workspace paths (e.g. `apps/web`). When set, only
+      packages reachable from those workspaces through non-dev dependencies are
+      judged. Empty judges every non-dev package.
+    required: false
+    default: ''
+  scope:
+    description: '`prod` skips `dev: true` packages; `all` judges them too. Ignored when `workspaces` is set.'
+    required: false
+    default: prod
+  allow-extra:
+    description: >
+      Comma- or newline-separated SPDX ids to allow beyond the built-in
+      permissive list (e.g. `MPL-2.0` when file-level copyleft is accepted).
+    required: false
+    default: ''
+  exceptions-file:
+    description: >
+      JSON array of `{ "name": "pkg" | "prefix*", "license": "<exact recorded
+      licence, or (none)>", "version": "<optional>", "reason": "..." }`. The
+      exception stops applying when the package's licence changes.
+    required: false
+    default: ''
+  own-package-prefixes:
+    description: Comma-separated name prefixes of first-party packages, skipped.
+    required: false
+    default: '@gmi/,@garrettmakesitllc/'
+  min-packages:
+    description: Fail when fewer packages than this were inspected (a scan of nothing passes everything).
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - name: Check dependency licenses
+      shell: bash
+      env:
+        LICENSE_LOCKFILE: ${{ inputs.lockfile }}
+        LICENSE_WORKSPACES: ${{ inputs.workspaces }}
+        LICENSE_SCOPE: ${{ inputs.scope }}
+        LICENSE_ALLOW_EXTRA: ${{ inputs.allow-extra }}
+        LICENSE_EXCEPTIONS_FILE: ${{ inputs.exceptions-file }}
+        LICENSE_OWN_PREFIXES: ${{ inputs.own-package-prefixes }}
+        LICENSE_MIN_PACKAGES: ${{ inputs.min-packages }}
+      run: node "${{ github.action_path }}/check.mjs"
