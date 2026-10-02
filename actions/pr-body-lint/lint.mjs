@@ -41,7 +41,7 @@
 const KEYWORD = String.raw`(?:close[sd]?|closing|fix(?:e[sd])?|fixing|resolve[sd]?|resolving)`;
 
 /** Negation words/phrases that disclaim a keyword GitHub does not read as disclaimed. */
-const NEGATION = String.raw`(?:not|n't|never|rather than|instead of)`;
+const NEGATION = String.raw`(?:\b(?:not|never|no|without|rather than|instead of)\b|n't\b)`;
 
 /** Up to `max` intervening words, never crossing a sentence boundary. */
 function wordGap(max) {
@@ -63,12 +63,24 @@ function wordGap(max) {
 const KEYWORD_TO_REF = String.raw`\s*:?\s*`;
 
 const NEGATED_CLOSE_RE = new RegExp(
-  String.raw`\b${NEGATION}\b${wordGap(3)}\b${KEYWORD}\b${KEYWORD_TO_REF}#\d+`,
+  String.raw`${NEGATION}${wordGap(3)}\b${KEYWORD}\b${KEYWORD_TO_REF}#\d+`,
   'gi',
 );
 
-/** `Closes #A, #B` — a keyword followed by a bare comma-separated issue list. */
-const COMMA_LIST_RE = new RegExp(String.raw`\b${KEYWORD}\b${KEYWORD_TO_REF}#\d+\s*,\s*#\d+`, 'gi');
+/** A second reference joined to the first by a comma, `and`, `, and` or `&`. */
+const LIST_SEP = String.raw`(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)`;
+
+/** `Closes #A, #B` / `Fixes #A and #B` — a keyword followed by a bare issue list. */
+const COMMA_LIST_RE = new RegExp(String.raw`\b${KEYWORD}\b${KEYWORD_TO_REF}#\d+${LIST_SEP}#\d+`, 'gi');
+
+/**
+ * GitHub does not act on a keyword inside code, so a body that QUOTES the
+ * syntax (`Closes #1, #2` in backticks, or a fenced example) is not a trap.
+ * Blanked rather than removed so word gaps keep their shape.
+ */
+function withoutCode(body) {
+  return body.replace(/```[\s\S]*?```/g, (m) => ' '.repeat(m.length)).replace(/`[^`\n]*`/g, (m) => ' '.repeat(m.length));
+}
 
 /**
  * Lint a PR body for the two closing-keyword traps. Pure — no I/O.
@@ -76,8 +88,9 @@ const COMMA_LIST_RE = new RegExp(String.raw`\b${KEYWORD}\b${KEYWORD_TO_REF}#\d+\
  * @param {string} body
  * @returns {{ rule: 'negated-close' | 'comma-list', match: string, message: string }[]}
  */
-function lintPrBody(body) {
+export function lintPrBody(rawBody) {
   const findings = [];
+  const body = withoutCode(rawBody);
 
   for (const m of body.matchAll(NEGATED_CLOSE_RE)) {
     findings.push({
@@ -95,7 +108,7 @@ function lintPrBody(body) {
       rule: 'comma-list',
       match: m[0],
       message:
-        `"${m[0].trim()}" — a closing keyword only closes the FIRST issue in a comma-separated ` +
+        `"${m[0].trim()}" — a closing keyword only closes the FIRST issue in a comma- or "and"-separated ` +
         `list; the rest stay open silently. Repeat the keyword per issue instead ` +
         `(e.g. "Closes #A" / "Closes #B" on separate lines).`,
     });
@@ -104,21 +117,24 @@ function lintPrBody(body) {
   return findings;
 }
 
-const body = process.env['PR_BODY'] ?? '';
-const findings = lintPrBody(body);
+function main() {
+  const findings = lintPrBody(process.env['PR_BODY'] ?? '');
 
-if (findings.length === 0) {
-  console.log('[pr-body-lint] no closing-keyword traps found.');
-  process.exit(0);
+  if (findings.length === 0) {
+    console.log('[pr-body-lint] no closing-keyword traps found.');
+    process.exit(0);
+  }
+
+  for (const finding of findings) {
+    const title =
+      finding.rule === 'negated-close' ? 'Negated closing keyword' : 'Closing keyword comma-list';
+    console.log(`::error title=${title}::${finding.message}`);
+  }
+
+  console.log(
+    `[pr-body-lint] ${findings.length} finding(s). See the annotations above — reword the PR body and re-run.`,
+  );
+  process.exit(1);
 }
 
-for (const finding of findings) {
-  const title =
-    finding.rule === 'negated-close' ? 'Negated closing keyword' : 'Closing keyword comma-list';
-  console.log(`::error title=${title}::${finding.message}`);
-}
-
-console.log(
-  `[pr-body-lint] ${findings.length} finding(s). See the annotations above — reword the PR body and re-run.`,
-);
-process.exit(1);
+if (import.meta.url === `file://${process.argv[1]}`) main();

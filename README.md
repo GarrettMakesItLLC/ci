@@ -10,13 +10,17 @@ identical across them.
 | `actions/setup-node-workspace` | composite | Node + workspace-aware dependency cache, install gated on a cache miss. npm and pnpm. Extra cache paths and a pre-install hook are configurable. |
 | `actions/ci-success` | composite | The one aggregate required status check. Fails when a required job was **skipped**. |
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
-| `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword and an unrepeated comma-list. |
-| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`). |
+| `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword (including contractions, `no`, `without`) and an unrepeated list (`#A, #B`, `#A and #B`, `#A & #B`). Quoted syntax in code is ignored. `lint.mjs` exports `lintPrBody`. |
+| `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`, which also takes `additional-titles` and `title-prefix` and closes every match). |
 | `actions/check-migration-locks` | composite | Fail a Prisma migration that takes a heavy lock on an existing table without `SET LOCAL lock_timeout`, or runs `CREATE INDEX CONCURRENTLY` beside another statement. `since` grandfathers applied migrations. |
 | `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
-| `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. |
-| `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache) + e2e script. Tier 2. |
+| `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. The copy a Vercel `ignoreCommand` vendors is kept honest by `check-vendored-copy`. |
+| `actions/check-vendored-copy` | composite | Fail when a file vendored from this repo (`deploy-target.mjs`, `pr-body-lint/lint.mjs`) no longer matches the upstream file at a pinned immutable ref. Comments and formatting are ignored; logic is not. |
+| `actions/check-dependency-licenses` | composite | Fail-closed production licence gate: an allowlist judged through an SPDX parser over `package-lock.json`. Unknown ids, `SEE LICENSE IN ...`, Commons-Clause, BUSL, UNLICENSED and a missing licence all fail. Needs no install. |
+| `actions/check-migration-order` | composite | Fail a PR that adds a Prisma migration which sorts before or collides with the newest on base, is future-dated, sits on a round hour or shares a timestamp, or that edits, renames or deletes an applied one. |
+| `actions/check-required-checks` | composite | Required-checks drift guard: every name in `.github/required-checks.json` is emitted by exactly one job, and a promotion branch's gating name is reachable only from the promotion PR. |
+| `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache, bounded and retried) + e2e script. Tier 2. `install-only: 'true'` stops after the install. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
 | `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
@@ -134,10 +138,97 @@ so the tracker never shows a stale "this is broken" once it isn't:
     token: ${{ github.token }}
 ```
 
+A lane whose symptoms are filed under several titles closes them all in one call, and a title that embeds
+a varying suffix closes by prefix. Every open issue under the dedupe label that matches the marker, the
+`title`, an `additional-titles` entry or the `title-prefix` is closed (`numbers` lists them):
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/file-failure-issue@v1
+  with:
+    mode: close
+    title: 'Nightly lane has gone quiet'
+    additional-titles: |
+      Nightly lane has gone quiet - refused before step 1
+    title-prefix: 'Nightly lane failed: '
+    dedupe-label: ci-failure
+    token: ${{ github.token }}
+```
+
 `title` and the dedupe label (`dedupe-label`, or the first entry of `labels`) must match exactly
 between the two calls — that pair is the only thing tying a close back to the issue a prior run
 filed. `close` no-ops silently when nothing is open under that title, which is the common case: most
 runs are green and never filed anything.
+
+### `e2e-test` install-only
+
+A job that starts its own server and runs its own scripts between the install and the test should not
+hand-write the install sequence. `install-only` does the resolve, cache, bounded and retried browser
+download and apt-cached OS dependencies, then stops:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/e2e-test@v1
+  with:
+    install-only: 'true'
+    browsers: chromium
+    # workspace: '@org/web'   # when @playwright/test lives in a workspace
+- run: npm run test:a11y
+```
+
+The version comes from `npm list`, falling back to `package-lock.json` when nothing is installed yet.
+
+### `check-dependency-licenses`
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-dependency-licenses@v1
+  with:
+    exceptions-file: scripts/license-exceptions.json   # optional
+    allow-extra: MPL-2.0                               # optional, a licence you have reviewed
+    workspaces: apps/web                               # optional, judge one workspace's closure
+    min-packages: '100'                                # a scan of nothing passes everything
+```
+
+An exception is `{ "name": "pkg" | "prefix*", "license": "<exact recorded licence, or (none)>", "reason": "..." }`.
+It stops applying when the package's licence changes. Run it after checkout; no install is needed.
+
+### `check-migration-order`
+
+```yaml
+- uses: actions/checkout@v7
+  with: { fetch-depth: 0 }
+- uses: GarrettMakesItLLC/ci/actions/check-migration-order@v1
+  with:
+    allow-round-hour: |
+      20260811030000_add_pet_clients
+```
+
+The base comes from `GITHUB_BASE_REF` (or `base-ref`) and is fetched when missing. On a promotion into
+`main`, `trunk-ref` (default `origin/dev`) names the migrations the branch inherits; they were judged when
+they merged there. `allow-collisions` baselines an exact set of already-applied duplicate directories.
+
+### `check-required-checks`
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-required-checks@v1
+  with:
+    promotion-branches: main   # empty for a single-tier repo
+```
+
+The manifest holds the names each protected branch's ruleset requires, written once and edited together with the ruleset:
+
+```json
+{ "main": ["Promotion gate"], "dev": [], "inherited": { "main": ["CI Success"], "dev": ["CI Success"] }, "integration_id": 15368 }
+```
+
+### `check-vendored-copy`
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/check-vendored-copy@v1
+  with:
+    vendored-path: scripts/ci/deploy-target.mjs
+    upstream-path: actions/deploy-target/deploy-target.mjs
+    ref: v1.4.0          # the immutable tag the copy was taken from
+    latest-ref: v1       # optional: warn when the copy is behind
+```
 
 ### `check-dependency-inventory` examples
 

@@ -70,6 +70,13 @@ jobs:
       - name: run-composite harness env
         run: bash scripts/run-composite.test.sh
 
+      # The unit cases behind check-dependency-licenses, check-migration-order,
+      # check-required-checks, check-vendored-copy and pr-body-lint, plus
+      # e2e-test's install-only gating. Each carries a regression row for the
+      # divergence that motivated it.
+      - name: shared action unit cases
+        run: bash scripts/shared-actions.test.sh
+
   # Proves post-deploy-probe.yml's failure path actually fires, not just that
   # it parses. actionlint (above) catches a malformed `inputs:`/`workflow_call`
   # block, but says nothing about whether the probe logic itself detects a
@@ -257,6 +264,67 @@ jobs:
         uses: ./actions/check-action-pins
         with:
           workflow-dir: actions
+
+  check-dependency-licenses-fixture:
+    name: check-dependency-licenses fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # SEE LICENSE, Commons-Clause, BUSL and a missing licence all sit in the
+      # violating lockfile. A denylist passes every one of them, so this step
+      # must fail through the real `uses:` path.
+      - name: Fixture with unreviewed and denied licences must fail
+        id: violations
+        continue-on-error: true
+        uses: ./actions/check-dependency-licenses
+        with:
+          lockfile: .github/fixtures/check-dependency-licenses/violations/package-lock.json
+
+      - name: Assert the violating fixture failed
+        env:
+          OUTCOME: ${{ steps.violations.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::check-dependency-licenses passed a lockfile with SEE LICENSE, Commons-Clause, BUSL and a missing licence (outcome=$OUTCOME), so it is failing open"
+            exit 1
+          fi
+
+      - name: Clean fixture must pass
+        uses: ./actions/check-dependency-licenses
+        with:
+          lockfile: .github/fixtures/check-dependency-licenses/clean/package-lock.json
+
+  check-required-checks-fixture:
+    name: check-required-checks fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fixture with a static promotion name, a duplicate and a missing emitter must fail
+        id: violations
+        continue-on-error: true
+        uses: ./actions/check-required-checks
+        with:
+          ci-workflow: .github/fixtures/check-required-checks/violations/ci.yml
+          manifest: .github/fixtures/check-required-checks/violations/required-checks.json
+
+      - name: Assert the violating fixture failed
+        env:
+          OUTCOME: ${{ steps.violations.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::check-required-checks passed a workflow that emits a required name from two lanes (outcome=$OUTCOME)"
+            exit 1
+          fi
+
+      - name: Clean fixture must pass
+        uses: ./actions/check-required-checks
+        with:
+          ci-workflow: .github/fixtures/check-required-checks/clean/ci.yml
+          manifest: .github/fixtures/check-required-checks/clean/required-checks.json
 
   cwv-judge-fixtures:
     name: cwv-judge fixtures

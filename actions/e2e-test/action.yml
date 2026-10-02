@@ -27,12 +27,35 @@ inputs:
       installs Playwright's full default set.
     required: false
     default: ''
+  install-only:
+    description: >
+      Install and cache the browsers (and OS dependencies) and stop: skip
+      `pre-run` and the test script. For a job that runs its own commands
+      between install and test (an app server, a different script per project)
+      but should not hand-write the install sequence.
+    required: false
+    default: 'false'
+  workspace:
+    description: >
+      npm workspace that owns `@playwright/test` (`npm exec --workspace=<name>`),
+      for a repo whose Playwright binary is not resolvable from the root. Empty
+      runs `npx` from the root. Ignored for pnpm.
+    required: false
+    default: ''
   pre-run:
     description: >
       Shell command to run after Playwright browsers are ready but before the
       e2e script — for a build step the e2e script needs (e.g. `npm run build`).
     required: false
     default: ''
+
+outputs:
+  playwright-version:
+    description: The @playwright/test version resolved from the lockfile.
+    value: ${{ steps.version.outputs.version }}
+  cache-hit:
+    description: "'true' when the browser cache was restored exactly."
+    value: ${{ steps.cache.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -48,9 +71,16 @@ runs:
       run: |
         set -euo pipefail
         if [ "$PM" = "pnpm" ]; then
-          v=$(pnpm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.[0].devDependencies["@playwright/test"].version // .[0].dependencies["@playwright/test"].version')
+          v=$(pnpm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.[0].devDependencies["@playwright/test"].version // .[0].dependencies["@playwright/test"].version' || true)
         else
-          v=$(npm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.dependencies["@playwright/test"].version // empty')
+          v=$(npm list @playwright/test --depth 0 --json 2>/dev/null | jq -r '.dependencies["@playwright/test"].version // empty' || true)
+        fi
+        # `npm list` only sees what is installed. A workspace-owned Playwright, or a
+        # job that has not installed yet, still names its version in the lockfile.
+        if [ -z "$v" ] || [ "$v" = "null" ]; then
+          if [ -f package-lock.json ]; then
+            v=$(jq -r '.packages["node_modules/@playwright/test"].version // empty' package-lock.json)
+          fi
         fi
         if [ -z "$v" ] || [ "$v" = "null" ]; then
           echo "::error title=Playwright not found::@playwright/test is not a resolvable dependency."
@@ -77,13 +107,30 @@ runs:
       env:
         PM: ${{ inputs.package-manager }}
         BROWSERS: ${{ inputs.browsers }}
+        WORKSPACE: ${{ inputs.workspace }}
       run: |
-        set -euo pipefail
-        if [ "$PM" = "pnpm" ]; then
-          pnpm exec playwright install $BROWSERS
-        else
-          npx playwright install $BROWSERS
-        fi
+        set -uo pipefail
+        install() {
+          if [ "$PM" = "pnpm" ]; then
+            pnpm exec playwright install $BROWSERS
+          elif [ -n "$WORKSPACE" ]; then
+            npm exec --workspace="$WORKSPACE" -- playwright install $BROWSERS
+          else
+            npx playwright install $BROWSERS
+          fi
+        }
+        # A download that stalls runs the job to its cap with no signal why, the
+        # same failure as install-deps below: bound each attempt and retry.
+        attempt=1
+        until timeout 300 bash -c "$(declare -f install); install"; do
+          if [ "$attempt" -ge 3 ]; then
+            echo "::error title=Playwright browser install failed::timed out or failed after $attempt attempts (5m each)"
+            exit 1
+          fi
+          echo "::warning title=Playwright browser install attempt $attempt failed or timed out::retrying"
+          attempt=$((attempt + 1))
+          sleep $((attempt * 10))
+        done
 
     # The browser binaries are cached a step above; the apt packages
     # `install-deps` downloads were not, so every run re-fetched them from
@@ -132,11 +179,14 @@ runs:
       env:
         PM: ${{ inputs.package-manager }}
         BROWSERS: ${{ inputs.browsers }}
+        WORKSPACE: ${{ inputs.workspace }}
       run: |
         set -uo pipefail
         install() {
           if [ "$PM" = "pnpm" ]; then
             pnpm exec playwright install-deps $BROWSERS
+          elif [ -n "$WORKSPACE" ]; then
+            npm exec --workspace="$WORKSPACE" -- playwright install-deps $BROWSERS
           else
             npx playwright install-deps $BROWSERS
           fi
@@ -168,11 +218,12 @@ runs:
         echo "cached $(find /tmp/apt-archives -name '*.deb' | wc -l) .deb package(s) for the next run"
 
     - name: Pre-run
-      if: inputs.pre-run != ''
+      if: inputs.install-only != 'true' && inputs.pre-run != ''
       shell: bash
       run: ${{ inputs.pre-run }}
 
     - name: Run e2e tests
+      if: inputs.install-only != 'true'
       shell: bash
       env:
         PM: ${{ inputs.package-manager }}
