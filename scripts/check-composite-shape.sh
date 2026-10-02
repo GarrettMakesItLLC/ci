@@ -6,6 +6,10 @@ shopt -s nullglob
 found=0
 for f in actions/*/action.yml; do
   found=$((found + 1))
+  # Parse it for real: the greps below read lines, and a file the runner
+  # cannot load (an unquoted `: ` in a plain scalar) passes every one of them.
+  python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$f" 2>/dev/null ||
+    { echo "::error file=$f::does not parse as YAML: $(python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$f" 2>&1 | tail -n 3 | tr '\n' ' ')"; fail=1; }
   for key in name description runs; do
     grep -qE "^${key}:" "$f" || { echo "::error file=$f::missing top-level '${key}:'"; fail=1; }
   done
