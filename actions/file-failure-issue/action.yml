@@ -76,7 +76,9 @@ outputs:
       mode closed several). Empty in `close` mode when nothing was open to close.
     value: ${{ steps.file.outputs.number || steps.close.outputs.number }}
   numbers:
-    description: Close mode only: every issue number closed, space-separated. Empty when nothing was open.
+    description: >
+      Close mode only: every issue number closed, space-separated. Empty when
+      nothing was open.
     value: ${{ steps.close.outputs.numbers }}
 
 runs:
