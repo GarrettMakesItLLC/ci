@@ -1,0 +1,45 @@
+name: Check vendored copy
+description: >
+  Fail when a file vendored from this repo (deploy-target.mjs for a Vercel
+  ignoreCommand, pr-body-lint/lint.mjs for a local replica) no longer matches
+  the upstream file at the pinned immutable ref. Comments, whitespace and
+  `export` are ignored; a logic change is drift.
+
+inputs:
+  vendored-path:
+    description: Path to the vendored file in the caller's checkout.
+    required: true
+  upstream-path:
+    description: Path of the file in the source repo, e.g. `actions/deploy-target/deploy-target.mjs`.
+    required: true
+  ref:
+    description: >
+      The pin: a full commit SHA or an immutable `vN.N.N` release tag the copy was
+      taken from. A moving ref (`v1`, `main`) is refused.
+    required: true
+  latest-ref:
+    description: Optional moving ref (`v1`). When the copy differs from it the check warns, never fails.
+    required: false
+    default: ''
+  repo:
+    description: Source repository.
+    required: false
+    default: GarrettMakesItLLC/ci
+  token:
+    description: Optional token for the raw download (raises the rate limit; needed only for a private source repo).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Check vendored copy
+      shell: bash
+      env:
+        VC_VENDORED_PATH: ${{ inputs.vendored-path }}
+        VC_UPSTREAM_PATH: ${{ inputs.upstream-path }}
+        VC_REF: ${{ inputs.ref }}
+        VC_LATEST_REF: ${{ inputs.latest-ref }}
+        VC_REPO: ${{ inputs.repo }}
+        VC_TOKEN: ${{ inputs.token }}
+      run: node "${{ github.action_path }}/check.mjs"

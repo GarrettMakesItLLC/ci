@@ -42,7 +42,8 @@ each job bills a whole minute rounded up.
 
 ## Verifying a change
 
-There is no test suite; the consumers are the tests. Before moving `v1`:
+The consumers are the integration tests; the unit cases for the node-backed actions run with
+`bash scripts/shared-actions.test.sh` (`node --test`). Before moving `v1`:
 
 ```bash
 ~/dotclaude/bin/ci-replica.sh           # self-check's jobs, locally, per .claude/ci-replica.json

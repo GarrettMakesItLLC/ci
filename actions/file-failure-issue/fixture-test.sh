@@ -23,13 +23,11 @@ echo '[]' >"$STATE"
 # Emulates just enough of `gh api .../issues` (list), `gh issue create`,
 # `gh issue comment`, `gh issue close` for file.sh/close.sh to run against,
 # backed by a JSON array in $STATE. No network, no real repo.
-# This mock re-implements gh's built-in --jq evaluation (gh bundles its own
-# jq engine; it does not shell out to a system `jq` binary, so the real
-# action never depends on one being installed). It hardcodes the one query
-# lib.sh actually issues — filter by state, drop PRs, tag each issue
-# `marker N` when the body contains the marker, else `title N` when the title
-# matches exactly — rather than interpreting the --jq string generically,
-# since that's the only expression this repo's own code produces.
+# `gh api --jq` is evaluated with the system `jq` over the open issues, so the
+# REAL filter expressions in lib.sh run here, not a hardcoded re-implementation
+# of them. `gh` bundles its own jq engine rather than shelling out, so the real
+# action never depends on a system `jq`; this fixture does, and ubuntu-latest
+# ships one. `--paginate` is a single page here.
 FAKE_GH="$WORK/gh"
 cat >"$FAKE_GH" <<'GHEOF'
 #!/usr/bin/env bash
@@ -39,26 +37,17 @@ echo "gh $*" >>"$CALLS"
 
 if [ "$1" = "api" ]; then
   state_filter=""
+  jq_expr=""
   args=("$@")
   for ((i = 0; i < ${#args[@]}; i++)); do
     if [ "${args[$i]}" = "-f" ] && [[ "${args[$((i + 1))]}" == state=* ]]; then
       state_filter="${args[$((i + 1))]#state=}"
     fi
+    if [ "${args[$i]}" = "--jq" ]; then
+      jq_expr="${args[$((i + 1))]}"
+    fi
   done
-  STATE_FILTER="$state_filter" MARKER="$MARKER" MATCH_TITLE="$MATCH_TITLE" FIXTURE_STATE="$FIXTURE_STATE" python3 - <<'PYEOF'
-import json, os
-state = json.load(open(os.environ["FIXTURE_STATE"]))
-sf = os.environ["STATE_FILTER"]
-marker = os.environ["MARKER"]
-title = os.environ["MATCH_TITLE"]
-for i in state:
-    if i["state"] != sf or i.get("pull_request") is not None:
-        continue
-    if marker in (i.get("body") or ""):
-        print(f"marker {i['number']}")
-    elif i.get("title") == title:
-        print(f"title {i['number']}")
-PYEOF
+  jq --arg s "$state_filter" 'map(select(.state == $s))' "$FIXTURE_STATE" | jq -r "$jq_expr"
   exit 0
 fi
 
@@ -129,6 +118,8 @@ run_mode() {
   : >"$GITHUB_OUTPUT"
   GH_TOKEN=fake \
     TITLE="$title" \
+    ADDITIONAL_TITLES="${ADDITIONAL_TITLES:-}" \
+    TITLE_PREFIX="${TITLE_PREFIX:-}" \
     BODY_FILE="$body_file" \
     LABELS="ci-failure,type:bug" \
     DEDUPE_LABEL="" \
@@ -225,5 +216,45 @@ marked=$(python3 -c "import json,sys; print(max(i['number'] for i in json.load(o
 run_mode file "uptime monitor alerts nobody" "$WORK/body.md" "" "uptime-lane"
 assert_output_number "$marked"
 assert_state_open_count 2
+
+seed_labelled() {
+  # An open issue under the ci-failure label, as GitHub would hold it. The fake
+  # does not filter by label, so every seeded issue counts as labelled.
+  seed_issue "$1" "${2:-no marker here}"
+}
+
+close_with() {
+  ADDITIONAL_TITLES="$1" TITLE_PREFIX="$2" run_mode close "$3" "" "Fixed" "${4:-}"
+}
+
+echo "== 11. close mode, additional-titles: one call closes every named symptom =="
+seed_labelled "Lane has gone quiet" >/dev/null
+seed_labelled "Lane has gone quiet - refused before step 1" >/dev/null
+seed_labelled "Unrelated lane has gone quiet" >/dev/null
+before=$(python3 -c "import json,sys; print(len([i for i in json.load(open(sys.argv[1])) if i['state']=='open']))" "$STATE")
+close_with "Lane has gone quiet - refused before step 1" "" "Lane has gone quiet"
+assert_state_open_count $((before - 2))
+
+echo "== 12. close mode, title-prefix: closes every issue carrying the prefix, leaves the rest =="
+seed_labelled "Deploy failed: production (abc123)" >/dev/null
+seed_labelled "Deploy failed: production (def456)" >/dev/null
+open_now=$(python3 -c "import json,sys; print(len([i for i in json.load(open(sys.argv[1])) if i['state']=='open']))" "$STATE")
+close_with "" "Deploy failed: production (" "No exact title matches"
+assert_state_open_count $((open_now - 2))
+if [ "$(sed -n 's/^numbers=//p' "$WORK/output" | wc -w)" -ne 2 ]; then
+  echo "FAIL: expected numbers= to list the two closed issues"; cat "$WORK/output"; exit 1
+fi
+
+echo "== 13. regression: a title with a backslash and quotes still closes (a spliced jq program breaks on it) =="
+tricky='Backup "nightly" failed: C:\\data\\x'
+seed_labelled "$tricky" >/dev/null
+open_now=$(python3 -c "import json,sys; print(len([i for i in json.load(open(sys.argv[1])) if i['state']=='open']))" "$STATE")
+close_with "" "" "$tricky"
+assert_state_open_count $((open_now - 1))
+
+echo "== 14. an empty prefix and empty additional-titles match nothing extra =="
+open_now=$(python3 -c "import json,sys; print(len([i for i in json.load(open(sys.argv[1])) if i['state']=='open']))" "$STATE")
+close_with "" "" "A title nothing carries"
+assert_state_open_count "$open_now"
 
 echo "ALL PASSED"

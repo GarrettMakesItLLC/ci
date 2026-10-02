@@ -38,10 +38,27 @@ inputs:
   mode:
     description: >
       `file` opens or comments on the tracking issue (the default). `close`
-      finds the open issue by the same title/dedupe-label and closes it with
-      a comment, no-op if none is open.
+      finds every open issue matching the same title/dedupe-label (and any
+      `additional-titles` / `title-prefix`) and closes each with a comment,
+      no-op if none is open.
     required: false
     default: 'file'
+  additional-titles:
+    description: >
+      Close mode only: newline-separated extra exact titles to close in the
+      same call, for a lane whose symptoms are filed under different titles
+      ("has gone quiet", "refused before step 1"). Matched under the same
+      dedupe label.
+    required: false
+    default: ''
+  title-prefix:
+    description: >
+      Close mode only: also close every open issue under the dedupe label whose
+      title starts with this prefix, for titles that embed a varying suffix (a
+      commit SHA, an environment). Empty disables. Scoped by the label, so
+      choose a prefix specific to the lane.
+    required: false
+    default: ''
   comment:
     description: >
       Close mode only: leading text for the closing comment, e.g. "Fixed".
@@ -55,9 +72,12 @@ inputs:
 outputs:
   number:
     description: >
-      The issue number filed, commented on, or closed. Empty in `close` mode
-      when nothing was open to close.
+      The issue number filed, commented on, or closed (the first, when close
+      mode closed several). Empty in `close` mode when nothing was open to close.
     value: ${{ steps.file.outputs.number || steps.close.outputs.number }}
+  numbers:
+    description: Close mode only: every issue number closed, space-separated. Empty when nothing was open.
+    value: ${{ steps.close.outputs.numbers }}
 
 runs:
   using: composite
@@ -89,6 +109,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         TITLE: ${{ inputs.title }}
+        ADDITIONAL_TITLES: ${{ inputs.additional-titles }}
+        TITLE_PREFIX: ${{ inputs.title-prefix }}
         LABELS: ${{ inputs.labels }}
         DEDUPE_LABEL: ${{ inputs.dedupe-label }}
         DEDUPE_KEY: ${{ inputs.dedupe-key }}

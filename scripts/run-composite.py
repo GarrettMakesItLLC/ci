@@ -114,6 +114,7 @@ def run(action_dir, given):
         # A hosted runner sets this before any step runs; an action reading it
         # under `set -u` would otherwise fail here looking like its own defect.
         env.setdefault("GITHUB_WORKSPACE", os.getcwd())
+        env.setdefault("RUNNER_TEMP", tempfile.gettempdir())
         env["GITHUB_ACTION_PATH"] = action_path
         # The runner's own invocation for `shell: bash`.
         rc = subprocess.call(["bash", "--noprofile", "--norc", "-eo", "pipefail", sf.name], env=env)

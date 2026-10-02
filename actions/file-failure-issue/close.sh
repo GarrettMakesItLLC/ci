@@ -9,8 +9,8 @@
 # Nothing open under that title is the NORMAL case: most runs are green and
 # never filed anything, so this is a silent no-op, not an error.
 #
-# Env in: GH_TOKEN, TITLE, LABELS, DEDUPE_LABEL, DEDUPE_KEY, COMMENT, RUN_URL,
-#         GITHUB_REPOSITORY, GITHUB_OUTPUT.
+# Env in: GH_TOKEN, TITLE, ADDITIONAL_TITLES, TITLE_PREFIX, LABELS, DEDUPE_LABEL,
+#         DEDUPE_KEY, COMMENT, RUN_URL, GITHUB_REPOSITORY, GITHUB_OUTPUT.
 set -euo pipefail
 
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,16 +19,23 @@ source "$dir/lib.sh"
 
 label="$(resolve_dedupe_label "$LABELS" "$DEDUPE_LABEL")"
 marker="$(dedupe_marker "$TITLE" "${DEDUPE_KEY:-}")"
-existing="$(find_existing_issue "$label" "$marker" "$TITLE")"
+matches="$(find_close_candidates "$label" "$marker" "$TITLE" "${ADDITIONAL_TITLES:-}" "${TITLE_PREFIX:-}")"
 
-if [ -z "$existing" ]; then
+if [ -z "$matches" ]; then
   echo "number=" >>"$GITHUB_OUTPUT"
-  echo "::notice title=Nothing to close::No open issue titled \"$TITLE\" under label \"$label\"."
+  echo "numbers=" >>"$GITHUB_OUTPUT"
+  echo "::notice title=Nothing to close::No open issue matching \"$TITLE\" under label \"$label\"."
   exit 0
 fi
 
-gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
-  --body "${COMMENT:-Resolved} as of $RUN_URL."
-gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --reason completed
-echo "number=$existing" >>"$GITHUB_OUTPUT"
-echo "::notice title=Closed issue::#$existing"
+closed=()
+while IFS= read -r number; do
+  [ -n "$number" ] || continue
+  gh issue comment "$number" --repo "$GITHUB_REPOSITORY" \
+    --body "${COMMENT:-Resolved} as of $RUN_URL."
+  gh issue close "$number" --repo "$GITHUB_REPOSITORY" --reason completed
+  closed+=("$number")
+  echo "::notice title=Closed issue::#$number"
+done <<<"$matches"
+echo "number=${closed[0]}" >>"$GITHUB_OUTPUT"
+echo "numbers=${closed[*]}" >>"$GITHUB_OUTPUT"

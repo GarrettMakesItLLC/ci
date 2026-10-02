@@ -1,0 +1,43 @@
+name: Check required checks
+description: >
+  Fail when a required status check named in `.github/required-checks.json` is
+  emitted by no job, by two jobs, or (on a promotion branch) by a lane other than
+  the promotion PR, so a ruleset cannot be satisfied by a stale green. Plain
+  node over the workflow text; needs no install.
+
+inputs:
+  ci-workflow:
+    description: Workflow file whose jobs emit the required checks.
+    required: false
+    default: .github/workflows/ci.yml
+  manifest:
+    description: >
+      JSON manifest: one array of required check names per protected branch
+      (`"main": [...]`), optional `inherited` (`{ "main": [...] }`, names a ruleset
+      this repo does not own requires), optional `external` (names another
+      workflow emits) and optional `integration_id`.
+    required: false
+    default: .github/required-checks.json
+  promotion-branches:
+    description: >
+      Comma-separated branches that only a promotion PR may merge into. Gating
+      names on these must be conditional on `github.base_ref` and the
+      pull_request event. A single-tier repo sets it empty.
+    required: false
+    default: main
+  integration-id:
+    description: Expected `integration_id` in the manifest (the GitHub Actions app). Empty skips the check.
+    required: false
+    default: '15368'
+
+runs:
+  using: composite
+  steps:
+    - name: Check required checks
+      shell: bash
+      env:
+        RC_CI_WORKFLOW: ${{ inputs.ci-workflow }}
+        RC_MANIFEST: ${{ inputs.manifest }}
+        RC_PROMOTION_BRANCHES: ${{ inputs.promotion-branches }}
+        RC_INTEGRATION_ID: ${{ inputs.integration-id }}
+      run: node "${{ github.action_path }}/check.mjs"

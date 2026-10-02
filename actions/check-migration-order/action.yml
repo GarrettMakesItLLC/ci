@@ -1,0 +1,61 @@
+name: Check migration order
+description: >
+  Fail a PR that adds a Prisma migration directory which sorts before or
+  collides with the newest on base, is future-dated, sits on a round hour, or
+  shares a timestamp with another; and one that renames, deletes or edits an
+  applied migration. Plain node over `git ls-tree`; needs no install.
+
+inputs:
+  migrations-dir:
+    description: Directory of `<timestamp>_<name>/migration.sql` folders.
+    required: false
+    default: prisma/migrations
+  base-ref:
+    description: >
+      Ref the PR merges into, as a git ref the checkout can resolve
+      (`origin/dev`). Defaults to `origin/$GITHUB_BASE_REF`. Fetched shallowly
+      when missing.
+    required: false
+    default: ''
+  trunk-ref:
+    description: >
+      Trunk whose migrations this branch inherits rather than authors. On a
+      promotion into `main`, `origin/dev`'s migrations were judged when they
+      merged there and are skipped. Ignored when equal to the base ref or not
+      fetchable. Empty disables.
+    required: false
+    default: origin/dev
+  round-hour:
+    description: Refuse a new migration whose timestamp ends in `0000` (minutes and seconds).
+    required: false
+    default: 'true'
+  allow-round-hour:
+    description: Newline- or comma-separated directory names exempt from the round-hour rule (applied, so renaming would break the ledger).
+    required: false
+    default: ''
+  allow-collisions:
+    description: >
+      Baselined duplicate-timestamp groups, one per line, each a comma-separated
+      set of directory names. Exact sets only: a third directory arriving on a
+      baselined timestamp still fails.
+    required: false
+    default: ''
+  immutability:
+    description: Refuse removing, renaming or editing a migration that exists on base.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Check migration order
+      shell: bash
+      env:
+        MO_MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        MO_BASE_REF: ${{ inputs.base-ref }}
+        MO_TRUNK_REF: ${{ inputs.trunk-ref }}
+        MO_ROUND_HOUR: ${{ inputs.round-hour }}
+        MO_ALLOW_ROUND_HOUR: ${{ inputs.allow-round-hour }}
+        MO_ALLOW_COLLISIONS: ${{ inputs.allow-collisions }}
+        MO_IMMUTABILITY: ${{ inputs.immutability }}
+      run: node "${{ github.action_path }}/check.mjs"

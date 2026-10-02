@@ -18,7 +18,8 @@
         "bash scripts/check-doc-pins.sh",
         "bash scripts/check-dependency-inventory-fixtures.sh",
         "bash scripts/next-release-tag.test.sh",
-        "bash scripts/run-composite.test.sh"
+        "bash scripts/run-composite.test.sh",
+        "bash scripts/shared-actions.test.sh"
       ]
     },
     {
@@ -48,6 +49,24 @@
       "commands": [
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations --expect fail",
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/clean"
+      ]
+    },
+    {
+      "name": "check-dependency-licenses-fixture",
+      "$mirrors": "self-check.yml `check-dependency-licenses-fixture`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/check-dependency-licenses --input lockfile=.github/fixtures/check-dependency-licenses/violations/package-lock.json --expect fail",
+        "scripts/run-composite.py actions/check-dependency-licenses --input lockfile=.github/fixtures/check-dependency-licenses/clean/package-lock.json"
+      ]
+    },
+    {
+      "name": "check-required-checks-fixture",
+      "$mirrors": "self-check.yml `check-required-checks-fixture`, through the real action.yml",
+      "budgetSeconds": 60,
+      "commands": [
+        "scripts/run-composite.py actions/check-required-checks --input ci-workflow=.github/fixtures/check-required-checks/violations/ci.yml --input manifest=.github/fixtures/check-required-checks/violations/required-checks.json --expect fail",
+        "scripts/run-composite.py actions/check-required-checks --input ci-workflow=.github/fixtures/check-required-checks/clean/ci.yml --input manifest=.github/fixtures/check-required-checks/clean/required-checks.json"
       ]
     },
     {

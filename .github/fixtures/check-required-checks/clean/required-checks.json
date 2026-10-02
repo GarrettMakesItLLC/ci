@@ -1,0 +1,6 @@
+{
+  "main": ["Promotion gate"],
+  "dev": [],
+  "inherited": { "main": ["CI Success"], "dev": ["CI Success"] },
+  "integration_id": 15368
+}

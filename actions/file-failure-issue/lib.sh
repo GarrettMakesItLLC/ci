@@ -59,3 +59,30 @@ resolve_dedupe_label() {
   IFS=',' read -ra names <<<"$labels"
   echo "${names[0]}"
 }
+
+# Close mode closes every open issue under the label that this call can name:
+# the marker, the exact title, any `additional-titles` entry, or a `title-prefix`.
+# A closer that names several titles per lane (a "has gone quiet" symptom and a
+# "refused before step 1" symptom) is the reason it is a set, and a stale
+# duplicate left open by an earlier recurrence is the reason it is every match,
+# not the first. All four reach jq through the environment, never spliced into
+# the program text, so a title carrying a quote or backslash cannot break it.
+find_close_candidates() {
+  local label="$1" marker="$2" title="$3" extra="$4" prefix="$5"
+  MARKER="$marker" MATCH_TITLE="$title" EXTRA_TITLES="$extra" TITLE_PREFIX="$prefix" \
+    gh api "repos/$GITHUB_REPOSITORY/issues" \
+    -X GET \
+    -f state=open \
+    -f labels="$label" \
+    -f per_page=100 \
+    --paginate \
+    --jq '(env.EXTRA_TITLES | split("\n") | map(select(. != ""))) as $extra
+      | .[] | select(.pull_request == null)
+      | select(
+          ((.body // "") | contains(env.MARKER))
+          or (.title == env.MATCH_TITLE)
+          or (.title as $t | any($extra[]; . == $t))
+          or (env.TITLE_PREFIX != "" and (.title | startswith(env.TITLE_PREFIX)))
+        )
+      | .number'
+}
