@@ -237,6 +237,15 @@ jobs:
           fi
           echo "result=success" >>"$GITHUB_OUTPUT"
 
+      # The probe step is continue-on-error so the filing steps below still run.
+      # A step killed before it wrote `result` leaves it empty, which none of
+      # them match: no issue, no recovery close, a green job. Fail loudly instead.
+      - name: Fail when the probe step died without a verdict
+        if: steps.probe.outcome == 'failure' && steps.probe.outputs.result == ''
+        run: |
+          echo "::error::the probe step failed without recording a result, so no issue was filed or closed"
+          exit 1
+
       - name: Compose the failure report
         if: steps.probe.outputs.result == 'failure'
         env:
