@@ -43,6 +43,14 @@ inputs:
       accepts the name appearing anywhere in the doc's text.
     required: false
     default: table-row
+  allow-empty:
+    description: >
+      Pass `true` when the repo genuinely declares no direct dependencies. By default a
+      scan that finds none fails, because that is indistinguishable from a gate that
+      read nothing. A manifest that matched `manifest-paths` but cannot be parsed
+      always fails.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -56,6 +64,7 @@ runs:
         WORKSPACE_PREFIXES: ${{ inputs.workspace-prefixes }}
         ALLOWLIST: ${{ inputs.allowlist }}
         MATCH_MODE: ${{ inputs.match-mode }}
+        ALLOW_EMPTY: ${{ inputs.allow-empty }}
       run: |
         set -euo pipefail
         node "$GITHUB_ACTION_PATH/check.mjs" \
@@ -65,4 +74,5 @@ runs:
           --workspace-prefixes "$WORKSPACE_PREFIXES" \
           --allowlist "$ALLOWLIST" \
           --match-mode "$MATCH_MODE" \
+          --allow-empty "$ALLOW_EMPTY" \
           --cwd "$GITHUB_WORKSPACE"

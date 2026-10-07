@@ -62,6 +62,11 @@ jobs:
       - name: check-dependency-inventory fixtures fire correctly
         run: bash scripts/check-dependency-inventory-fixtures.sh
 
+      # A job missing from ci-success.needs runs on every PR but cannot block a
+      # merge, so the gate it proves can regress unseen.
+      - name: Every job is waited for by CI Success
+        run: bash scripts/check-ci-success-needs.sh
+
       # release.yml names each release from this; a wrong bump rule mints an
       # immutable tag nobody can take back.
       - name: next-release-tag fixtures
@@ -660,7 +665,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, check-migration-locks-fixture, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
+    needs: [lint, probe-fixture-check, file-failure-issue-fixture, check-action-pins-fixture, check-migration-locks-fixture, check-dependency-licenses-fixture, check-required-checks-fixture, cwv-judge-fixtures, ci-success-dogfood, pr-body-lint-fixtures, deploy-target-fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

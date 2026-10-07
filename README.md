@@ -22,10 +22,10 @@ identical across them.
 | `actions/check-required-checks` | composite | Required-checks drift guard: every name in `.github/required-checks.json` is emitted by exactly one job, and a promotion branch's gating name is reachable only from the promotion PR. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache, bounded and retried) + e2e script. Tier 2. `install-only: 'true'` stops after the install. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
-| `actions/lint-check` | composite | Repo linter (ESLint by default) in error-on-warning mode. |
+| `actions/lint-check` | composite | Repo linter (ESLint by default) via its package script. Fails on the script's exit code, so warning policy lives in the script (`eslint --max-warnings 0`). |
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
-| `actions/unit-test` | composite | Unit tests with coverage; optional minimum line-coverage gate. |
-| `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. |
+| `actions/unit-test` | composite | Unit tests with coverage. The coverage gate is off by default (`min-coverage: '0'`); set it to enforce a minimum line-coverage percentage. |
+| `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. An unparseable manifest, or a scan that finds no dependencies (unless `allow-empty: 'true'`), fails. |
 | `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). Measures, never judges. |
 | `actions/cwv-judge` | composite | Fail only on a Core Web Vitals regression that **holds across nights** — over the floor and over a rise factor against the rolling median for N consecutive nights. Too little history passes open and says `insufficient-history`. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |

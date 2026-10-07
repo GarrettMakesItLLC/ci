@@ -41,6 +41,10 @@
  *                                   the first column of a markdown table row,
  *                                   `` | `name` | ... `` — or `substring` — the name
  *                                   must appear anywhere in the doc's text.
+ *   --allow-empty <true|false>     `false` (default) — fail when the matched manifests
+ *                                   declare no checkable dependency at all, since that
+ *                                   is indistinguishable from a gate that read nothing.
+ *                                   `true` for a repo that genuinely has none.
  *   --cwd <path>                   directory manifest-paths and doc-path are
  *                                   resolved against. Default: process.cwd()
  */
@@ -55,6 +59,7 @@ function parseArgs(argv) {
     workspacePrefixes: '',
     allowlist: '',
     matchMode: 'table-row',
+    allowEmpty: 'false',
     cwd: process.cwd(),
   };
   const flagToKey = {
@@ -64,6 +69,7 @@ function parseArgs(argv) {
     '--workspace-prefixes': 'workspacePrefixes',
     '--allowlist': 'allowlist',
     '--match-mode': 'matchMode',
+    '--allow-empty': 'allowEmpty',
     '--cwd': 'cwd',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -81,6 +87,11 @@ function parseArgs(argv) {
   }
   if (!args.docPath) {
     throw new Error('check-dependency-inventory: --doc-path is required');
+  }
+  if (args.allowEmpty !== 'true' && args.allowEmpty !== 'false') {
+    throw new Error(
+      `check-dependency-inventory: --allow-empty must be "true" or "false", got "${args.allowEmpty}"`,
+    );
   }
   if (args.matchMode !== 'table-row' && args.matchMode !== 'substring') {
     throw new Error(
@@ -170,16 +181,33 @@ export function run(args) {
   }
 
   const declared = new Map(); // name -> first manifest that declared it
+  const unparseable = [];
   for (const manifestPath of manifestPaths) {
     let manifest;
     try {
       manifest = JSON.parse(readFileSync(path.join(cwd, manifestPath), 'utf8'));
-    } catch {
-      continue; // not a real manifest, or unreadable — skip rather than fail the whole run
+    } catch (err) {
+      // A manifest that matched --manifest-paths but cannot be read would otherwise
+      // exempt every dependency it declares.
+      unparseable.push(`${manifestPath}  (${err.message})`);
+      continue;
     }
     for (const name of directDependencies(manifest, fields, workspacePrefixes)) {
       if (!declared.has(name)) declared.set(name, manifestPath);
     }
+  }
+
+  if (unparseable.length > 0) {
+    console.error('check-dependency-inventory: manifest(s) that could not be parsed:');
+    for (const entry of unparseable) console.error(`  ${entry}`);
+    return 1;
+  }
+
+  if (declared.size === 0 && args.allowEmpty !== 'true') {
+    console.error(
+      `check-dependency-inventory: no direct dependencies found in ${manifestPaths.length} manifest(s) matching "${args.manifestPaths}". Pass --allow-empty true if the repo genuinely declares none.`,
+    );
+    return 1;
   }
 
   const docText = readFileSync(path.join(cwd, args.docPath), 'utf8');
