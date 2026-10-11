@@ -454,8 +454,8 @@ jobs:
           [ "$UNDER" = "clean" ] || { echo "::error::under-floor verdict was '$UNDER', expected clean"; fail=1; }
           [ "$COLD" = "insufficient-history" ] || { echo "::error::cold-start verdict was '$COLD', expected insufficient-history — a gate that read nothing is reading as clean"; fail=1; }
           [ "$ALLOWED" = "clean" ] || { echo "::error::a held rise under an active allowance's ceiling was '$ALLOWED', expected clean — the allowance is not reaching the gate"; fail=1; }
-          [ "$EXPIRED_OUTCOME" = "failure" ] && [ "$EXPIRED" = "expired-allowance" ] || { echo "::error::an expired allowance gave outcome=$EXPIRED_OUTCOME verdict=$EXPIRED, expected failure/expired-allowance"; fail=1; }
-          [ "$LEDGER_OUTCOME" = "failure" ] && [ "$LEDGER" = "regression" ] || { echo "::error::the imported ledger gave outcome=$LEDGER_OUTCOME verdict=$LEDGER, expected failure/regression — imported nights are not being read"; fail=1; }
+          if [ "$EXPIRED_OUTCOME" != "failure" ] || [ "$EXPIRED" != "expired-allowance" ]; then echo "::error::an expired allowance gave outcome=$EXPIRED_OUTCOME verdict=$EXPIRED, expected failure/expired-allowance"; fail=1; fi
+          if [ "$LEDGER_OUTCOME" != "failure" ] || [ "$LEDGER" != "regression" ]; then echo "::error::the imported ledger gave outcome=$LEDGER_OUTCOME verdict=$LEDGER, expected failure/regression — imported nights are not being read"; fail=1; fi
           exit "$fail"
 
   pr-body-lint-fixtures:
