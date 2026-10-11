@@ -1,0 +1,16 @@
+{
+  "measurements": [
+    {
+      "route": "/",
+      "lcpMs": 2400,
+      "tbtMs": 120,
+      "cls": 0.02
+    },
+    {
+      "route": "/small",
+      "lcpMs": 1000,
+      "tbtMs": 20,
+      "cls": 0.01
+    }
+  ]
+}

@@ -407,16 +407,54 @@ jobs:
           measurements-file: .github/fixtures/cwv-judge/cold-start/tonight.json
           history-dir: .github/fixtures/cwv-judge/cold-start
 
+      # The held regression again, under an active allowance whose ceiling it
+      # stays below: the allowance must reach the gate through the input.
+      - name: Held rise inside an active allowance must pass
+        id: allowed
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/regression/tonight.json
+          history-dir: .github/fixtures/cwv-judge/regression
+          route-allowances: '[{"route":"/","metric":"LCP","ceiling":3000,"reason":"fixture: the held 2.8 s rise sits under this ceiling","issue":"#101","expires":"2099-12-31"}]'
+
+      # Nothing else is wrong with this night, so only the expiry can fail it.
+      - name: An expired allowance must fail
+        id: expired
+        continue-on-error: true
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/single-night-spike/tonight.json
+          history-dir: .github/fixtures/cwv-judge/single-night-spike
+          route-allowances: '[{"route":"/","metric":"LCP","ceiling":3000,"reason":"fixture: expired the day before tonight","issue":"#101","expires":"2026-09-09"}]'
+
+      # The regression's history as per-night `{ measurements }` ledger files —
+      # an imported ledger must judge exactly like native history.
+      - name: Held regression read from an imported ledger must fail
+        id: ledger
+        continue-on-error: true
+        uses: ./actions/cwv-judge
+        with:
+          measurements-file: .github/fixtures/cwv-judge/ledger-import/tonight.json
+          history-dir: .github/fixtures/cwv-judge/ledger-import
+
       - name: Assert the verdicts
         env:
           SPIKE: ${{ steps.spike.outputs.verdict }}
           UNDER: ${{ steps.under_floor.outputs.verdict }}
           COLD: ${{ steps.cold.outputs.verdict }}
+          ALLOWED: ${{ steps.allowed.outputs.verdict }}
+          EXPIRED: ${{ steps.expired.outputs.verdict }}
+          EXPIRED_OUTCOME: ${{ steps.expired.outcome }}
+          LEDGER: ${{ steps.ledger.outputs.verdict }}
+          LEDGER_OUTCOME: ${{ steps.ledger.outcome }}
         run: |
           fail=0
           [ "$SPIKE" = "clean" ] || { echo "::error::single-night spike verdict was '$SPIKE', expected clean"; fail=1; }
           [ "$UNDER" = "clean" ] || { echo "::error::under-floor verdict was '$UNDER', expected clean"; fail=1; }
           [ "$COLD" = "insufficient-history" ] || { echo "::error::cold-start verdict was '$COLD', expected insufficient-history — a gate that read nothing is reading as clean"; fail=1; }
+          [ "$ALLOWED" = "clean" ] || { echo "::error::a held rise under an active allowance's ceiling was '$ALLOWED', expected clean — the allowance is not reaching the gate"; fail=1; }
+          [ "$EXPIRED_OUTCOME" = "failure" ] && [ "$EXPIRED" = "expired-allowance" ] || { echo "::error::an expired allowance gave outcome=$EXPIRED_OUTCOME verdict=$EXPIRED, expected failure/expired-allowance"; fail=1; }
+          [ "$LEDGER_OUTCOME" = "failure" ] && [ "$LEDGER" = "regression" ] || { echo "::error::the imported ledger gave outcome=$LEDGER_OUTCOME verdict=$LEDGER, expected failure/regression — imported nights are not being read"; fail=1; }
           exit "$fail"
 
   pr-body-lint-fixtures:
