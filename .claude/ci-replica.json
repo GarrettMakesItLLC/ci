@@ -48,6 +48,7 @@
       "budgetSeconds": 60,
       "commands": [
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations --expect fail",
+        "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations-not-null --expect fail",
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/clean"
       ]
     },

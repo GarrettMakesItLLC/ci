@@ -75,7 +75,7 @@ jobs:
       - name: run-composite harness env
         run: bash scripts/run-composite.test.sh
 
-      # The unit cases behind check-dependency-licenses, check-migration-order,
+      # The unit cases behind check-dependency-licenses, check-migration-locks, check-migration-order,
       # check-required-checks, check-vendored-copy and pr-body-lint, plus
       # e2e-test's install-only gating. Each carries a regression row for the
       # divergence that motivated it.
@@ -171,8 +171,9 @@ jobs:
       # Both fixtures hold the same pre-cutoff migration with no lock_timeout,
       # so a passing clean run also proves `since` grandfathers it. The
       # violating set adds a post-cutoff ALTER TABLE with no lock_timeout; the
-      # clean set adds it with one, plus a new table indexed with no prefix
-      # (exempt: nothing else can hold a lock on it).
+      # clean set adds it with one, a new table indexed with no prefix
+      # (exempt: nothing else can hold a lock on it), and a NOT NULL column
+      # that carries a DEFAULT.
       - name: Fixture with a violation must fail
         id: violations
         continue-on-error: true
@@ -188,6 +189,25 @@ jobs:
             exit 1
           fi
           echo "ok — violating fixture correctly failed"
+
+      # The lock_timeout is in place here, so only the NOT NULL-without-DEFAULT
+      # rule can fail it.
+      - name: Fixture with a NOT NULL column and no DEFAULT must fail
+        id: not_null
+        continue-on-error: true
+        uses: ./actions/check-migration-locks
+        with:
+          since: '20260101000000'
+          migrations-dir: .github/fixtures/check-migration-locks/violations-not-null
+
+      - name: Assert the NOT NULL fixture failed
+        env:
+          OUTCOME: ${{ steps.not_null.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::check-migration-locks passed an ADD COLUMN ... NOT NULL with no DEFAULT on an existing table (outcome=$OUTCOME)"
+            exit 1
+          fi
 
       - name: Fixture with no violations must pass
         uses: ./actions/check-migration-locks

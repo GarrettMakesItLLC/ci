@@ -1,9 +1,10 @@
 name: Check migration locks
 description: >
   Fail when a Prisma migration takes a heavy lock on an existing table without
-  `SET LOCAL lock_timeout` before it, or runs `CREATE INDEX CONCURRENTLY`
-  alongside another statement. Runs dotclaude's `bin/migration-lock-check.py`,
-  the same check its migration-guard hook applies at write time.
+  `SET LOCAL lock_timeout` before it, runs `CREATE INDEX CONCURRENTLY`
+  alongside another statement, or adds a `NOT NULL` column with no `DEFAULT`
+  to an existing table. The checker ships with the action
+  (`migration-lock-check.py`), so a run fetches nothing.
 
 inputs:
   since:
@@ -18,11 +19,10 @@ inputs:
     required: false
     default: prisma/migrations
   checker-ref:
-    description: >
-      dotclaude commit the checker is fetched from. A full SHA, so a change
-      to the checker reaches consumers only when this default moves.
+    description: Ignored. The checker is vendored into this action and versions with the `v1` tag.
     required: false
-    default: fbff77ba5f44facd37a3d3351f2e66b36511a12c
+    default: ''
+    deprecationMessage: checker-ref is ignored — the checker ships with the action. Remove the input.
 
 runs:
   using: composite
@@ -32,17 +32,13 @@ runs:
       env:
         SINCE: ${{ inputs.since }}
         MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
-        CHECKER_REF: ${{ inputs.checker-ref }}
       run: |
         set -euo pipefail
-        checker="$RUNNER_TEMP/migration-lock-check.py"
-        curl -fsSL --retry 3 -o "$checker" \
-          "https://raw.githubusercontent.com/GarrettMakesItLLC/dotclaude/${CHECKER_REF}/bin/migration-lock-check.py"
         shopt -s nullglob
         files=("$MIGRATIONS_DIR"/*/migration.sql)
         if [ ${#files[@]} -eq 0 ]; then
           echo "::error::no migrations under $MIGRATIONS_DIR — wrong migrations-dir?"
           exit 1
         fi
-        python3 "$checker" --since "$SINCE" "${files[@]}"
+        python3 "${{ github.action_path }}/migration-lock-check.py" --since "$SINCE" "${files[@]}"
         echo "✓ no lock-rule violations in ${#files[@]} migration(s) (those before $SINCE are grandfathered)"
