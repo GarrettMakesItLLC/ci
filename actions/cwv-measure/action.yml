@@ -8,8 +8,17 @@ description: >
 
 inputs:
   base-url:
-    description: Origin the routes are served from, e.g. `http://127.0.0.1:4173`. Prefer a server that speaks HTTP/2 — see the README.
+    description: Origin the routes are served from, e.g. `http://127.0.0.1:4173`. Prefer a server that speaks HTTP/2, or set `http2` — see the README.
     required: true
+  http2:
+    description: >
+      Measure through an HTTP/2 front (TLS, self-signed, pinned in Chrome by
+      key) started over `base-url`, which must be a plain `http://` origin.
+      Lighthouse models HTTP/1.1's six-connection cap, so a local preview that
+      speaks HTTP/1.1 overcharges a page with many preloaded chunks relative to
+      production's HTTP/2. Needs `openssl` (on the runner image).
+    required: false
+    default: 'false'
   routes:
     description: Newline- or comma-separated route paths (each starting with `/`). Blank lines and `#` comments are ignored.
     required: true
@@ -54,6 +63,7 @@ runs:
         CWV_RUNS: ${{ inputs.runs }}
         CWV_FORM_FACTOR: ${{ inputs.form-factor }}
         CWV_CHROME_PATH: ${{ inputs.chrome-path }}
+        CWV_HTTP2: ${{ inputs.http2 }}
         CWV_OUT_INPUT: ${{ inputs.output-file }}
       run: |
         out="${CWV_OUT_INPUT:-${RUNNER_TEMP:-/tmp}/cwv/measurements.json}"

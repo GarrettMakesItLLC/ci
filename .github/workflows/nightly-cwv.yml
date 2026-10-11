@@ -29,10 +29,15 @@ name: Nightly Core Web Vitals
 #           /blog
 #       secrets: inherit
 #
+# A product that installs private `@gmi/*` packages needs the packages token
+# in this job: `secrets: inherit` passes `GMI_PACKAGES_TOKEN` by name, or map
+# it explicitly with `secrets: { packages-token: ${{ secrets.GMI_PACKAGES_TOKEN }} }`.
+#
 # The rolling history lives in a workflow artifact on the ref that ran, so a
 # manual run from a branch builds its own history instead of polluting the
 # default branch's. Artifacts expire; a lane that skips longer than
 # `history-retention-days` restarts cold and says `insufficient-history`.
+# `history-branch` keeps it on a branch instead, which does not expire.
 
 on:
   workflow_call:
@@ -59,6 +64,15 @@ on:
         required: false
         type: string
         default: http://127.0.0.1:4173
+      http2:
+        description: >
+          Measure through an HTTP/2 front over `base-url` (which must then be a
+          plain `http://` origin). A local preview speaking HTTP/1.1 is charged
+          Lighthouse's six-connection queue that production's HTTP/2 does not
+          have — see `cwv-measure`.
+        required: false
+        type: boolean
+        default: false
       ready-path:
         description: Path polled on `base-url` until it answers 2xx, before measuring.
         required: false
@@ -94,6 +108,29 @@ on:
         required: false
         type: string
         default: cwv-history
+      history-branch:
+        description: >
+          Keep the history on this branch (one `<history-path>/<date>.json` per
+          night) instead of in an artifact. The branch must exist, and the job
+          needs a token with `contents: write` on it: pass `history-token`
+          (this workflow cannot raise its own permissions past the caller's).
+          Empty uses the artifact store.
+        required: false
+        type: string
+        default: ''
+      history-path:
+        description: Directory on `history-branch` holding the night files.
+        required: false
+        type: string
+        default: perf/cwv
+      route-allowances:
+        description: >
+          JSON array of per-route, per-metric allowances
+          (`route`, `metric`, `ceiling`, `reason`, `issue`, `expires`, all
+          required) — see `cwv-judge`. An expired allowance fails the lane.
+        required: false
+        type: string
+        default: ''
       history-retention-days:
         description: Days the history artifact is kept (1-90). Refreshed every night the lane runs.
         required: false
@@ -160,12 +197,15 @@ on:
           owns. Pass it explicitly, or use `secrets: inherit`, which supplies
           `GMI_PACKAGES_TOKEN` below.
         required: false
+      history-token:
+        description: "Token with `contents: write` on `history-branch`. Used only when `history-branch` is set."
+        required: false
       GMI_PACKAGES_TOKEN:
         description: "The org secret by its own name, so `secrets: inherit` needs no mapping. `packages-token` wins when both are set."
         required: false
     outputs:
       verdict:
-        description: '`clean`, `regression`, `insufficient-history` or `unjudged`.'
+        description: '`clean`, `regression`, `expired-allowance`, `insufficient-history` or `unjudged`.'
         value: ${{ jobs.cwv.outputs.verdict }}
 
 permissions:
@@ -235,6 +275,7 @@ jobs:
           routes: ${{ inputs.routes }}
           runs: ${{ inputs.runs }}
           form-factor: ${{ inputs.form-factor }}
+          http2: ${{ inputs.http2 }}
 
       # Not `if: always()`: a cancelled run must not be judged. A measure step
       # that failed leaves no file, which the judge reports as `unjudged`.
@@ -245,6 +286,10 @@ jobs:
         with:
           measurements-file: ${{ steps.measure.outputs.measurements-file }}
           history-artifact: ${{ inputs.history-artifact }}
+          history-branch: ${{ inputs.history-branch }}
+          history-path: ${{ inputs.history-path }}
+          route-allowances: ${{ inputs.route-allowances }}
+          token: ${{ inputs.history-branch != '' && secrets.history-token || github.token }}
           baseline-nights: ${{ inputs.baseline-nights }}
           sustain-nights: ${{ inputs.sustain-nights }}
           lcp-floor-ms: ${{ inputs.lcp-floor-ms }}

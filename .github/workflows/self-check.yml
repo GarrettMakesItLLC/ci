@@ -360,7 +360,8 @@ jobs:
 
       # Unit-level: the persistence rule itself, including the cases that must
       # NOT fire — a single loud night, a big ratio under the floor, a window
-      # with a gap.
+      # with a gap — plus route allowances, the history stores, and
+      # cwv-measure's HTTP/2 front.
       - name: Persistence rule cases
         run: bash scripts/cwv-judge.test.sh
 
