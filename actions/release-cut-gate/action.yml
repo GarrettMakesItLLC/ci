@@ -1,0 +1,38 @@
+name: Release-cut gate
+description: >
+  Refuse (or, on a schedule, skip) a release cut while PRs are about to land on
+  the branch being cut: an entry in its merge queue, or an open PR into it with
+  auto-merge armed and pending or green checks. Sets the `proceed` output.
+  Needs `checks: read` and `statuses: read` in the job's permissions.
+
+inputs:
+  branch:
+    description: Branch the cut is taken from.
+    required: false
+    default: dev
+  force:
+    description: Cut even though PRs are about to land.
+    required: false
+    default: 'false'
+  token:
+    description: Token for the GraphQL reads.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  proceed:
+    description: '`true` when the cut may run, `false` when it is refused or skipped.'
+    value: ${{ steps.gate.outputs.proceed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the merge queue and armed PRs
+      id: gate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GATE_BRANCH: ${{ inputs.branch }}
+        GATE_EVENT: ${{ github.event_name }}
+        GATE_FORCE: ${{ inputs.force }}
+      run: node "${{ github.action_path }}/gate.mjs"
