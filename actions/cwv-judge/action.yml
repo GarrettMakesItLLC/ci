@@ -2,11 +2,12 @@ name: Judge Core Web Vitals
 description: >
   Fail only on a Core Web Vitals regression that holds across nights. Reads a
   night record from `cwv-measure`, compares it with the prior nights kept in a
-  history artifact, and fails when LCP, TBT or CLS on a route has been both over
-  its floor and over its rise factor against the rolling-median baseline for N
-  consecutive nights. One loud night is reported, never failed. Too little
-  history passes open and says so (`insufficient-history`). Needs `actions: read`
-  and a token for `gh` unless `history-dir` is given.
+  history artifact (or on a ledger branch), and fails when LCP, TBT or CLS on a
+  route has been both over its floor (or its route allowance) and over its rise
+  factor against the rolling-median baseline for N consecutive nights. One loud
+  night is reported, never failed. Too little history passes open and says so
+  (`insufficient-history`). Needs a token for `gh` unless `history-dir` is
+  given.
 
 inputs:
   measurements-file:
@@ -20,8 +21,33 @@ inputs:
     default: cwv-history
   history-dir:
     description: >
-      Read `history.json` from this directory instead of the artifact API. Used by
-      fixtures and local runs; leave empty in a real lane.
+      Read the history from this directory instead of the artifact API:
+      `history.json` and/or per-night `<YYYY-MM-DD>.json` ledger files (this
+      judge's night records, or `{ measurements: [...] }` records). Used by
+      fixtures, local runs, and a lane that fetched its own ledger.
+    required: false
+    default: ''
+  history-branch:
+    description: >
+      Keep the history on this branch instead of in an artifact: one
+      `<history-path>/<YYYY-MM-DD>.json` per night, read before judging and
+      written after (green or red). Outlives artifact retention and doubles as
+      an evidence ledger. The branch must exist, and `token` needs
+      `contents: write` on it. Empty uses the artifact store.
+    required: false
+    default: ''
+  history-path:
+    description: Directory on `history-branch` holding the night files.
+    required: false
+    default: perf/cwv
+  route-allowances:
+    description: >
+      JSON array of per-route, per-metric allowances, each
+      `{"route":"/x","metric":"LCP","ceiling":3000,"reason":"...","issue":"#123","expires":"YYYY-MM-DD"}`.
+      The ceiling replaces the floor for that route and metric only, so a rise
+      that holds over the ceiling still fails. Every field is required, and an
+      allowance past its `expires` date stops applying and fails the lane
+      (`expired-allowance`) until it is renewed or removed.
     required: false
     default: ''
   baseline-nights:
@@ -57,13 +83,13 @@ inputs:
     required: false
     default: '1.5'
   token:
-    description: "Token for the history artifact API (`actions: read`); defaults to the workflow's GITHUB_TOKEN."
+    description: "Token for the history: `actions: read` for the artifact store, `contents: write` on `history-branch` for the branch store. Defaults to the workflow's GITHUB_TOKEN."
     required: false
     default: ${{ github.token }}
 
 outputs:
   verdict:
-    description: '`clean`, `regression`, `insufficient-history` or `unjudged` (nothing measured).'
+    description: '`clean`, `regression`, `expired-allowance`, `insufficient-history` or `unjudged` (nothing measured).'
     value: ${{ steps.judge.outputs.verdict }}
   history-dir:
     description: Directory holding the updated `history.json` (tonight appended) and `report.md`. Upload it as the history artifact.
@@ -80,6 +106,9 @@ runs:
         CWV_MEASUREMENTS_FILE: ${{ inputs.measurements-file }}
         CWV_HISTORY_ARTIFACT: ${{ inputs.history-artifact }}
         CWV_HISTORY_DIR: ${{ inputs.history-dir }}
+        CWV_HISTORY_BRANCH: ${{ inputs.history-branch }}
+        CWV_HISTORY_PATH: ${{ inputs.history-path }}
+        CWV_ROUTE_ALLOWANCES: ${{ inputs.route-allowances }}
         CWV_BASELINE_NIGHTS: ${{ inputs.baseline-nights }}
         CWV_SUSTAIN_NIGHTS: ${{ inputs.sustain-nights }}
         CWV_LCP_FLOOR_MS: ${{ inputs.lcp-floor-ms }}
