@@ -154,7 +154,7 @@ export function judgeNight(tonight, history, cfg) {
         baseline: cfg.baseline,
         sustain: cfg.sustain,
       });
-      rows.push({ route, metric, value: m[metric.key], floor, allowance, ...verdict });
+      rows.push({ route, metric, value: m[metric.key], floor, defaultFloor: cfg.floors[metric.key], allowance, ...verdict });
     }
   }
   const regressions = rows.filter((r) => r.outcome === 'regression');
@@ -174,12 +174,13 @@ export function judgeNight(tonight, history, cfg) {
  * Measurements over their floor that did NOT fail the night — reported, never gated.
  *
  * A green lane is read by nobody, so a night where a route sat over its floor must not look like
- * one where every route was inside it. Two different states are folded into this list and must
- * never read the same: the gate looked and found no rise that held (`clean`), or it had too little
- * history to look (`insufficient-history`). The second is an absence, not a pass.
+ * one where every route was inside it. That includes a route inside its allowance: it is still
+ * outside the floor. Two different states are folded into this list and must never read the same:
+ * the gate looked and found no rise that held (`clean`), or it had too little history to look
+ * (`insufficient-history`). The second is an absence, not a pass.
  */
 export function overFloorRows(result) {
-  return result.rows.filter((r) => r.value > r.floor && r.outcome !== 'regression');
+  return result.rows.filter((r) => r.value > r.defaultFloor && r.outcome !== 'regression');
 }
 
 /** The `::warning` a night with over-floor measurements must carry, or undefined. */
@@ -188,7 +189,12 @@ export function overFloorAnnotation(result, cfg) {
   if (over.length === 0) return undefined;
   const unjudged = over.filter((r) => r.outcome !== 'clean');
   const title = unjudged.length > 0 ? 'Core Web Vitals over the floor, NOT judged' : 'Core Web Vitals over the floor, not a regression';
-  const list = over.map((r) => `${r.route} ${r.metric.label} ${fmt(r.metric, r.value)} (floor ${fmt(r.metric, r.floor)}${r.allowance ? ', allowance' : ''}; ${r.outcome})`).join('; ');
+  const list = over
+    .map((r) => {
+      const inside = r.allowance ? `, inside allowance ${fmt(r.metric, r.allowance.ceiling)} (${r.allowance.issue})` : '';
+      return `${r.route} ${r.metric.label} ${fmt(r.metric, r.value)} (floor ${fmt(r.metric, r.defaultFloor)}${inside}; ${r.outcome})`;
+    })
+    .join('; ');
   const tail =
     unjudged.length > 0
       ? ` ${unjudged.length} of them were not judged at all — fewer than ${cfg.baseline + cfg.sustain - 1} prior nights carry numbers — which is unjudged, not cleared.`
@@ -207,7 +213,7 @@ export function renderReport(result, tonight, cfg) {
     const base = r.baseline === undefined ? '—' : fmt(r.metric, r.baseline);
     const ratio = r.ratio === undefined ? '—' : `${r.ratio.toFixed(2)}x`;
     const floor = `${fmt(r.metric, r.floor)}${r.allowance ? ` (allowance ${r.allowance.issue}, until ${r.allowance.expires})` : ''}`;
-    const over = r.value > r.floor && r.outcome !== 'regression' ? ' †' : '';
+    const over = r.value > r.defaultFloor && r.outcome !== 'regression' ? ' †' : '';
     lines.push(`| \`${r.route}\` | ${r.metric.label} | ${fmt(r.metric, r.value)}${over} | ${floor} | ${base} | ${ratio} | ${r.held ?? '—'}/${cfg.sustain} | ${r.outcome} |`);
   }
   for (const u of result.unmeasured) lines.push(`| \`${u.route}\` | — | UNMEASURED | — | — | — | — | ${u.error} |`);

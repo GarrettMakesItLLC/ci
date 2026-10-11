@@ -155,6 +155,8 @@ test('allowances: an active one passes a held rise that stays under its ceiling'
   const row = r.rows.find((x) => x.route === '/' && x.metric.key === 'lcpMs');
   assert.equal(row.floor, 3000);
   assert.equal(row.allowance.issue, '#123');
+  // Inside the allowance is still outside the floor, and never silently green.
+  assert.match(overFloorAnnotation(r, cfg), /\/ LCP 2800 ms \(floor 2500 ms, inside allowance 3000 ms \(#123\); clean\)/);
 });
 
 test('allowances: a held rise over the ceiling still fails — a ceiling, not an exemption', () => {
