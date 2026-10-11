@@ -151,6 +151,18 @@ on:
       token:
         description: Token with issues:write for the failure issue. Falls back to the workflow's GITHUB_TOKEN.
         required: false
+      packages-token:
+        description: >
+          Token that can read the private `@gmi/*` packages on GitHub Packages
+          (the `GMI_PACKAGES_TOKEN` org secret), exported as `NODE_AUTH_TOKEN`
+          for the install. A caller's own workflow-level `env:` does not reach a
+          called workflow, and `GITHUB_TOKEN` cannot read packages another repo
+          owns. Pass it explicitly, or use `secrets: inherit`, which supplies
+          `GMI_PACKAGES_TOKEN` below.
+        required: false
+      GMI_PACKAGES_TOKEN:
+        description: "The org secret by its own name, so `secrets: inherit` needs no mapping. `packages-token` wins when both are set."
+        required: false
     outputs:
       verdict:
         description: '`clean`, `regression`, `insufficient-history` or `unjudged`.'
@@ -171,6 +183,11 @@ jobs:
       issues: write
     outputs:
       verdict: ${{ steps.judge.outputs.verdict }}
+    env:
+      # Every product's `.npmrc` resolves `@garrettmakesitllc/*` through this.
+      # Without it `npm ci` either 401s or exits 0 having left the private
+      # packages out, and the lane goes red every night with no verdict.
+      NODE_AUTH_TOKEN: ${{ secrets.packages-token || secrets.GMI_PACKAGES_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 

@@ -65,6 +65,16 @@ on:
           workflows, so its checks never run). This job inherited neither that
           token choice nor its safety net (#54a).
         required: false
+      packages-token:
+        description: >
+          Token that can read the private `@gmi/*` packages (the
+          `GMI_PACKAGES_TOKEN` org secret), exported as `NODE_AUTH_TOKEN` so the
+          dependency bump can resolve and install them. `secrets: inherit`
+          supplies `GMI_PACKAGES_TOKEN` below without a mapping.
+        required: false
+      GMI_PACKAGES_TOKEN:
+        description: "The org secret by its own name, for `secrets: inherit`. `packages-token` wins when both are set."
+        required: false
 
 jobs:
   dependency-bump:
@@ -78,6 +88,10 @@ jobs:
       # For the failure issue below — a job that cannot report its own failure
       # is the thing #54a is about.
       issues: write
+    env:
+      # `npm-check-updates` and the install both read the caller's `.npmrc`,
+      # which resolves the private `@garrettmakesitllc/*` scope through this.
+      NODE_AUTH_TOKEN: ${{ secrets.packages-token || secrets.GMI_PACKAGES_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
