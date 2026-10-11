@@ -30,6 +30,17 @@ inputs:
       `VALIDATE CONSTRAINT`.
     required: false
     default: 'false'
+  require-begin:
+    description: >
+      `'true'` counts a `SET LOCAL lock_timeout` as a lock bound only when the
+      migration opens its own `BEGIN;` (or `START TRANSACTION;`) before it and
+      commits after the locking statement. Prisma applies a migration one
+      statement at a time, each autocommitting, so a bare `SET LOCAL` is a
+      no-op. Off by default so a repo with bare ones does not break; turn it on
+      once its migrations since `since` are wrapped. A session-level
+      `SET lock_timeout` is accepted either way.
+    required: false
+    default: 'false'
   checker-ref:
     description: Ignored. The checker is vendored into this action and versions with the `v1` tag.
     required: false
@@ -45,6 +56,7 @@ runs:
         SINCE: ${{ inputs.since }}
         MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
         STRICT_CONSTRAINTS: ${{ inputs.strict-constraints }}
+        REQUIRE_BEGIN: ${{ inputs.require-begin }}
       run: |
         set -euo pipefail
         shopt -s nullglob
@@ -55,5 +67,6 @@ runs:
         fi
         flags=(--since "$SINCE")
         if [ "$STRICT_CONSTRAINTS" = "true" ]; then flags+=(--strict-constraints); fi
+        if [ "$REQUIRE_BEGIN" = "true" ]; then flags+=(--require-begin); fi
         python3 "${{ github.action_path }}/migration-lock-check.py" "${flags[@]}" "${files[@]}"
         echo "✓ no lock-rule violations in ${#files[@]} migration(s) (those before $SINCE are grandfathered)"

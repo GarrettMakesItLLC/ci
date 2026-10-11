@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Check Prisma migration SQL against the lock and unsafe-DDL rules.
 
-    migration-lock-check.py [--since YYYYMMDDHHMMSS] [--strict-constraints] <migration.sql>... | -
+    migration-lock-check.py [--since YYYYMMDDHHMMSS] [--strict-constraints] [--require-begin] <migration.sql>... | -
 
 1. A statement that takes a heavy lock (ALTER TABLE, DROP, a plain CREATE INDEX)
-   on a table that already exists must come after `SET LOCAL lock_timeout`.
+   on a table that already exists must come after a lock_timeout. Prisma sends a
+   migration one statement at a time and each autocommits, so a bare
+   `SET LOCAL lock_timeout` is a no-op (Postgres warns 25P01) and bounds nothing.
+   With `--require-begin` it counts only inside the file's own `BEGIN; ... COMMIT;`: a `BEGIN;` /
+   `START TRANSACTION;` before it and a `COMMIT;` after the locking statement.
+   A session-level `SET lock_timeout = ...;` (no LOCAL) bounds every later
+   statement on the connection and is accepted as is.
    Statements that touch only tables the same migration creates are exempt:
    nothing else can hold a lock on a table that did not exist. A foreign key
    counts as touching the table it references.
 2. `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` is the only statement
-   in its migration and carries no lock_timeout prefix: a second statement puts
-   it inside Prisma's implicit transaction, where Postgres refuses it.
+   in its migration and carries no lock_timeout prefix: every other multi-statement
+   migration is wrapped in `BEGIN; ... COMMIT;`, and a concurrent build cannot
+   run inside that wrapper.
 3. `ALTER TABLE ... ADD COLUMN ... NOT NULL` on a table that already exists
    carries a `DEFAULT` (or is `GENERATED`). Migrations run before the new code
    is live, against every row the table already holds; on a non-empty table the
@@ -29,6 +36,10 @@
    row under a heavy lock. Off by default because Prisma generates exactly that
    foreign key whenever a relation is added to an existing table.
 
+`--require-begin` enforces the `BEGIN; ... COMMIT;` requirement above. Without it a
+`SET LOCAL lock_timeout` anywhere before the locking statement counts, wrapped or not,
+so a repo whose history holds bare ones can adopt it after wrapping them.
+
 `-` reads one migration from stdin (the PreToolUse hook's path). `--since`
 skips any file whose migration directory timestamp sorts before it, so a repo
 can adopt the check in CI without rewriting checksum-locked history.
@@ -45,7 +56,10 @@ import sys
 
 HEAVY = re.compile(r"^(ALTER\s+TABLE|DROP\s|CREATE\s+(UNIQUE\s+)?INDEX\s)", re.I)
 CONCURRENT = re.compile(r"^(CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX)\s+CONCURRENTLY\b", re.I)
-LOCK_TIMEOUT = re.compile(r"^SET\s+LOCAL\s+lock_timeout\b", re.I)
+SET_LOCAL_TIMEOUT = re.compile(r"^SET\s+LOCAL\s+lock_timeout\b", re.I)
+SET_SESSION_TIMEOUT = re.compile(r"^SET\s+(SESSION\s+)?lock_timeout\b", re.I)
+BEGIN_TX = re.compile(r"^(BEGIN|START\s+TRANSACTION)\b", re.I)
+COMMIT_TX = re.compile(r"^(COMMIT|END)\b", re.I)
 CREATE_TABLE = re.compile(r"^CREATE\s+(UNLOGGED\s+)?TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(\S+)", re.I)
 ALTER_TARGET = re.compile(r"^ALTER\s+TABLE\s+(IF\s+EXISTS\s+)?(ONLY\s+)?(\S+)", re.I)
 INDEX_TARGET = re.compile(r"\sON\s+(ONLY\s+)?(\S+)", re.I)
@@ -198,21 +212,22 @@ def enum_value_used_in_same_migration(sql: str) -> list[str]:
     return found
 
 
-def violations(sql: str, strict_constraints: bool = False) -> list[str]:
+def violations(sql: str, strict_constraints: bool = False, require_begin: bool = False) -> list[str]:
     stmts = statements(sql)
     if any(CONCURRENT.match(s) for s in stmts):
         found = []
         if len(stmts) > 1:
             found.append(
                 "CREATE/DROP INDEX CONCURRENTLY must be the only statement in its migration — "
-                "a second statement puts it inside a transaction, where Postgres refuses it. "
+                "every other multi-statement migration is wrapped in BEGIN; ... COMMIT;, and a "
+                "concurrent build cannot run inside that wrapper. "
                 "Split it into its own migration (with no lock_timeout prefix)."
             )
         return found
 
     created = {table_name(m.group(3)) for s in stmts if (m := CREATE_TABLE.match(s))}
     found = (
-        lock_timeout_violations(stmts, created)
+        lock_timeout_violations(stmts, created, require_begin)
         + not_null_without_default(stmts, created)
         + set_not_null(stmts, created)
         + enum_value_used_in_same_migration(sql)
@@ -222,7 +237,9 @@ def violations(sql: str, strict_constraints: bool = False) -> list[str]:
     return found
 
 
-def lock_timeout_violations(stmts: list[str], created: set[str]) -> list[str]:
+def lock_timeout_violations(
+    stmts: list[str], created: set[str], require_begin: bool = False
+) -> list[str]:
     for idx, stmt in enumerate(stmts):
         if not HEAVY.match(stmt):
             continue
@@ -231,29 +248,58 @@ def lock_timeout_violations(stmts: list[str], created: set[str]) -> list[str]:
         touched = {target(stmt)} | {table_name(r) for r in REFERENCES.findall(stmt)}
         if touched <= created:
             continue
-        if any(LOCK_TIMEOUT.match(s) for s in stmts[:idx]):
+        before = stmts[:idx]
+        if any(SET_SESSION_TIMEOUT.match(s) for s in before):
             return []
+        local_at = next((i for i, s in enumerate(before) if SET_LOCAL_TIMEOUT.match(s)), None)
+        if local_at is not None:
+            if not require_begin:
+                return []
+            opened = any(BEGIN_TX.match(s) for s in before[:local_at])
+            closed = any(COMMIT_TX.match(s) for s in stmts[idx + 1:])
+            if opened and closed:
+                return []
+            missing = " and ".join(
+                ([] if opened else ["opens no `BEGIN;` before it"])
+                + ([] if closed else ["has no `COMMIT;` after the locking statement"])
+            )
+            return [
+                f"`{stmt[:80]}` takes a heavy lock on an existing table, and its "
+                f"`SET LOCAL lock_timeout` bounds nothing: the migration {missing}. Prisma "
+                "applies a migration one statement at a time, each autocommitting, so a bare "
+                "`SET LOCAL` is a no-op (Postgres warns 25P01). Wrap the file in its own "
+                "`BEGIN; ... COMMIT;` (rules/prisma.md)."
+            ]
         return [
             f"`{stmt[:80]}` takes a heavy lock on an existing table with no "
-            "`SET LOCAL lock_timeout = '5s';` before it. A pending ACCESS EXCLUSIVE request "
+            "lock_timeout before it. A pending ACCESS EXCLUSIVE request "
             "queues every read the old server is still serving, so the table is down until "
             "the migration gets its lock; bounded, the migration fails and the site stays up. "
-            "Open the migration with `SET LOCAL lock_timeout = '5s';` (rules/prisma.md)."
+            "Open the migration with `BEGIN;` and `SET LOCAL lock_timeout = '5s';` and close it "
+            "with `COMMIT;` (rules/prisma.md)."
         ]
     return []
 
 
 def main(argv: list[str]) -> int:
-    since, strict = None, False
-    if argv and argv[0] == "--strict-constraints":
-        strict, argv = True, argv[1:]
+    since, strict, require_begin = None, False, False
+    while argv and argv[0] in ("--strict-constraints", "--require-begin"):
+        if argv[0] == "--strict-constraints":
+            strict = True
+        else:
+            require_begin = True
+        argv = argv[1:]
     if len(argv) >= 2 and argv[0] == "--since":
         since, argv = argv[1], argv[2:]
         if not re.fullmatch(r"\d{14}", since):
             print("--since takes a 14-digit migration timestamp", file=sys.stderr)
             return 2
-    if argv and argv[0] == "--strict-constraints":
-        strict, argv = True, argv[1:]
+    while argv and argv[0] in ("--strict-constraints", "--require-begin"):
+        if argv[0] == "--strict-constraints":
+            strict = True
+        else:
+            require_begin = True
+        argv = argv[1:]
     if not argv:
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
         return 2
@@ -268,7 +314,7 @@ def main(argv: list[str]) -> int:
                 continue
             with open(path, encoding="utf-8") as f:
                 sql, label = f.read(), path
-        for v in violations(sql, strict):
+        for v in violations(sql, strict, require_begin):
             print(f"{label}: {v}", file=sys.stderr)
             bad = 1
     return bad
