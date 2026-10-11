@@ -19,7 +19,7 @@ identical across them.
 | `actions/check-vendored-copy` | composite | Fail when a file vendored from this repo (`deploy-target.mjs`, `pr-body-lint/lint.mjs`) no longer matches the upstream file at a pinned immutable ref. Comments and formatting are ignored; logic is not. |
 | `actions/check-dependency-licenses` | composite | Fail-closed production licence gate: an allowlist judged through an SPDX parser over `package-lock.json`. Unknown ids, `SEE LICENSE IN ...`, Commons-Clause, BUSL, UNLICENSED and a missing licence all fail. Needs no install. |
 | `actions/check-migration-order` | composite | Fail a PR that adds a Prisma migration which sorts before or collides with the newest on base, is future-dated, sits on a round hour or shares a timestamp, or that edits, renames or deletes an applied one. |
-| `actions/release-cut-gate` | composite | Refuse (scheduled: skip) a release cut while PRs are about to land on `dev` — a merge-queue entry, or an open PR with auto-merge armed and pending or green checks. `release-cut.yml` runs it first; `force` overrides. Needs `checks: read` and `statuses: read`. |
+| `actions/release-cut-gate` | composite | Refuse (scheduled: skip) a release cut while PRs are about to land on `dev` — a merge-queue entry, or an open PR with auto-merge armed and pending or green checks. `release-cut.yml` runs it first; `force` overrides. Reads armed PRs' check rollups when the token can (`checks: read` + `statuses: read`), and otherwise waits on merge-queue entries only. |
 | `actions/check-required-checks` | composite | Required-checks drift guard: every name in `.github/required-checks.json` is emitted by exactly one job, and a promotion branch's gating name is reachable only from the promotion PR. |
 | `actions/e2e-test` | composite | Playwright browser install (lockfile-keyed cache, bounded and retried) + e2e script. Tier 2. `install-only: 'true'` stops after the install. |
 | `actions/format-check` | composite | Formatter (Prettier or Biome) in check mode; fails on drift. |
@@ -285,8 +285,6 @@ jobs:
       contents: write
       pull-requests: read
       issues: write
-      checks: read
-      statuses: read
     uses: GarrettMakesItLLC/ci/.github/workflows/release-cut.yml@v1
     with:
       sha: ${{ inputs.sha }}
@@ -298,8 +296,11 @@ A `gate` job runs before the cut and refuses it while PRs are about to land on `
 entry, or an open PR into `dev` with auto-merge armed and pending or green checks), so promotions
 batch instead of chasing each merge. A `workflow_dispatch` cut fails and names the PRs; a `schedule`
 cut skips with a summary and the next run tries again. `force: true` cuts anyway; `gate: false`
-removes the gate. A repo with no merge queue and nothing armed passes through unchanged. The gate
-reads check rollups, hence `checks: read` and `statuses: read` in the caller's permission ceiling.
+removes the gate. A repo with no merge queue and nothing armed passes through unchanged. The workflow
+asks for no permission beyond the ones above: adding one to a reusable workflow fails every caller
+whose ceiling lacks it at `startup_failure`. So `GITHUB_TOKEN` cannot read check rollups there, and
+the gate counts only merge-queue entries; an armed PR whose rollup it cannot read is not assumed to
+be landing, because a red PR can stay armed for days and would hold every scheduled cut.
 
 `secrets: inherit` passes the caller's own secrets (`RELEASE_PAT`, `GITHUB_TOKEN`) through — the
 reusable workflow never needs them named individually in the consumer.

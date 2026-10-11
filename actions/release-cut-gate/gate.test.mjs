@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { cutGateDecision } from './gate.mjs';
+import { cutGateDecision, rollupForbidden } from './gate.mjs';
 
 const pr = (number, extra = {}) => ({ number, title: `PR ${number}`, isInMergeQueue: false, autoMergeRequest: null, rollup: 'SUCCESS', ...extra });
 const ARMED = { enabledAt: '2026-10-10T00:00:00Z' };
@@ -81,4 +81,31 @@ test('release-cut.yml runs the gate first and the cut depends on its output', ()
   assert.match(wf, /uses: GarrettMakesItLLC\/ci\/actions\/release-cut-gate@v1/);
   assert.match(wf, /\n {6}force:\n {8}description:/);
   assert.match(wf, /\n {6}gate:\n {8}description:/);
+});
+
+// A token without `checks`/`statuses` cannot read rollups. The workflow asks for
+// neither, because a reusable workflow that adds a permission fails every caller
+// whose ceiling lacks it at startup.
+test('an armed PR whose rollup is unreadable is not assumed to be landing', () => {
+  assert.equal(decide({ openPrs: [pr(11, { autoMergeRequest: ARMED, rollup: 'UNREADABLE' })] }).proceed, true);
+});
+
+test('a queued PR still blocks when its rollup is unreadable', () => {
+  const d = decide({ openPrs: [pr(12, { isInMergeQueue: true, rollup: 'UNREADABLE' })] });
+  assert.equal(d.fail, true);
+  assert.deepEqual(d.blockers.map((b) => b.number), [12]);
+});
+
+test('rollupForbidden reads a FORBIDDEN error on the rollup path, and nothing else', () => {
+  const forbidden = { type: 'FORBIDDEN', path: ['repository', 'pullRequests', 'nodes', 0, 'commits', 'nodes', 0, 'commit', 'statusCheckRollup'], message: 'Resource not accessible by integration' };
+  assert.equal(rollupForbidden([forbidden]), true);
+  assert.equal(rollupForbidden([{ ...forbidden, type: undefined }]), true);
+  assert.equal(rollupForbidden([{ ...forbidden, path: ['repository', 'mergeQueue'] }]), false);
+  assert.equal(rollupForbidden(undefined), false);
+});
+
+test('release-cut.yml asks for no permission its callers were not already granting', () => {
+  const wf = readFileSync(new URL('../../.github/workflows/release-cut.yml', import.meta.url), 'utf8');
+  const live = wf.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+  assert.doesNotMatch(live, /^\s*(checks|statuses):/m);
 });

@@ -3,7 +3,8 @@ description: >
   Refuse (or, on a schedule, skip) a release cut while PRs are about to land on
   the branch being cut: an entry in its merge queue, or an open PR into it with
   auto-merge armed and pending or green checks. Sets the `proceed` output.
-  Needs `checks: read` and `statuses: read` in the job's permissions.
+  Reads armed PRs' check rollups when the token has `checks: read` and
+  `statuses: read`; without them it waits on merge-queue entries only.
 
 inputs:
   branch:

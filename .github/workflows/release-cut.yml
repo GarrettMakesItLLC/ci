@@ -34,8 +34,6 @@ name: Cut a release branch
 #       contents: write
 #       pull-requests: read
 #       issues: write
-#       checks: read
-#       statuses: read
 #     uses: GarrettMakesItLLC/ci/.github/workflows/release-cut.yml@v1
 #     with:
 #       sha: ${{ inputs.sha }}
@@ -43,9 +41,10 @@ name: Cut a release branch
 #     secrets: inherit
 #
 # A `gate` job runs first and refuses the cut (scheduled runs: skips) while PRs
-# are about to land on dev — see `actions/release-cut-gate`. It reads check
-# rollups, so the caller's permission ceiling also needs `checks: read` and
-# `statuses: read`. `force: true` cuts anyway; `gate: false` removes the gate.
+# are about to land on dev — see `actions/release-cut-gate`. It needs no
+# permission beyond the ones above: without `checks`/`statuses` it cannot read an
+# armed PR's rollup, so it waits on merge-queue entries only (see the action).
+# `force: true` cuts anyway; `gate: false` removes the gate.
 #
 # The permissions block is not optional in practice. A called workflow's own
 # `permissions:` can only narrow what the run was granted, never widen it — so
@@ -103,9 +102,6 @@ concurrency:
 permissions:
   contents: write
   pull-requests: read
-  # For the `gate` job: it reads each armed PR's check rollup.
-  checks: read
-  statuses: read
   # For the failure-issue step only. The promotion PR is opened with
   # RELEASE_PAT, deliberately not with GITHUB_TOKEN — see that step.
   issues: write
@@ -122,8 +118,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      checks: read
-      statuses: read
     outputs:
       proceed: ${{ steps.gate.outputs.proceed || steps.off.outputs.proceed }}
     steps:
