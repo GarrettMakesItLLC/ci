@@ -10,5 +10,6 @@ node --test \
   actions/check-migration-order/order.test.mjs \
   actions/check-required-checks/check.test.mjs \
   actions/check-vendored-copy/check.test.mjs \
-  actions/pr-body-lint/lint.test.mjs
+  actions/pr-body-lint/lint.test.mjs \
+  actions/release-cut-gate/gate.test.mjs
 bash scripts/e2e-test-install-only.test.sh

@@ -81,10 +81,32 @@ function unquote(v) {
 const OPERANDS = new Set(['pull_request', 'merge_group', 'push', 'main', 'dev', 'true', 'false', 'workflow_dispatch', 'schedule']);
 const REF_LITERAL = /^refs\/(heads|tags)\//;
 
+/** `expr` with every `format(...)` call, balanced parentheses and all, cut out. */
+function withoutFormatCalls(expr) {
+  let out = '';
+  for (let i = 0; i < expr.length; ) {
+    const m = /^\bformat\s*\(/.exec(expr.slice(i));
+    if (m === null || (i > 0 && /[\w.]/.test(expr[i - 1]))) {
+      out += expr[i++];
+      continue;
+    }
+    let depth = 1;
+    let quoted = false;
+    i += m[0].length;
+    for (; i < expr.length && depth > 0; i++) {
+      if (expr[i] === "'") quoted = !quoted;
+      else if (!quoted && expr[i] === '(') depth++;
+      else if (!quoted && expr[i] === ')') depth--;
+    }
+  }
+  return out;
+}
+
 /** Every single-quoted literal a `name:` expression can resolve to. */
 export function possibleNames(expr) {
   if (!expr.includes('${{')) return expr ? [expr] : [];
-  return [...expr.matchAll(/'([^']*)'/g)]
+  const rest = withoutFormatCalls(expr);
+  return [...rest.matchAll(/'([^']*)'/g)]
     .map((m) => m[1])
     .filter((s) => !OPERANDS.has(s) && !REF_LITERAL.test(s) && s !== '');
 }
