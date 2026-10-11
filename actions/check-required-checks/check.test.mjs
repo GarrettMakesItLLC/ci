@@ -75,3 +75,24 @@ test('the violations fixture reports every rule', () => {
     assert.ok(p.some((x) => re.test(x)), String(re));
   }
 });
+
+test('a format() literal inside a job-name expression is not a check name', () => {
+  const name = "Accessibility (axe) (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})";
+  assert.deepEqual(possibleNames(name), []);
+  assert.deepEqual(possibleNames("${{ format('{0}-{1}', 'a', matrix.x) }}"), []);
+  assert.deepEqual(possibleNames("${{ format(' {0}', fromJSON(matrix.x)) && 'Real' || '' }}"), ['Real']);
+  assert.deepEqual(possibleNames("${{ (github.event_name == 'pull_request') && 'CI Success' || 'x' }}"), ['CI Success', 'x']);
+});
+
+test('two matrix jobs named with format(\' {0}\', ...) do not collide', () => {
+  const job = (id) => `  ${id}:
+    name: Accessibility (axe) (\${{ matrix.suite }}\${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
+    runs-on: ubuntu-latest
+    steps: []
+`;
+  const workflow = `${clean.workflow.replace(/\n*$/, '\n')}${job('a11y')}${job('queue-a11y')}`;
+  // Appended after the last job, so both land under `jobs:` when it is the final section.
+  const p = problems({ workflow });
+  assert.ok(!p.some((x) => /\{0\}/.test(x)), p.join('\n'));
+  assert.ok(!p.some((x) => /can both report/.test(x)), p.join('\n'));
+});

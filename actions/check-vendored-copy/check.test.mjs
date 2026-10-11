@@ -57,3 +57,10 @@ test('cli: matching copy passes, drifted copy fails, moving ref is refused', () 
   assert.equal(cli(good, { VC_REF: 'v1' }).rc, 1);
   assert.equal(cli(path.join(dir, 'missing.mjs')).rc, 1);
 });
+
+test('a Prettier-wrapped method chain is not drift', () => {
+  assert.equal(sha('const x = body\n  .replace(/a/g, "b")\n  .trim();'), sha('const x = body.replace(/a/g, "b").trim();'));
+  assert.equal(sha('a\n  .b\n  .c(d)'), sha('a.b.c(d)'));
+  // Dropping a call from the chain is still drift.
+  assert.notEqual(sha('body.replace(x).trim()'), sha('body.replace(x)'));
+});

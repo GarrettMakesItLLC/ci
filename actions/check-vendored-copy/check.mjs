@@ -22,7 +22,7 @@ export function normalizedCode(source) {
     .replace(/^\s*\/\/.*$/gm, '')
     .replace(/export /g, '')
     .replace(/,(\s*[)\]}])/g, '$1')
-    .replace(/\s*([{}()[\],;:=<>+\-*/&|?!])\s*/g, '$1')
+    .replace(/\s*([{}()[\],;:=<>+\-*/&|?!.])\s*/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }
