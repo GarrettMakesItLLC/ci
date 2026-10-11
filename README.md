@@ -12,7 +12,7 @@ identical across them.
 | `actions/pr-title-lint` | composite | Conventional-Commit check on the PR title. |
 | `actions/pr-body-lint` | composite | Catch two silent GitHub closing-keyword traps in the PR body: a negated keyword (including contractions, `no`, `without`) and an unrepeated list (`#A, #B`, `#A and #B`, `#A & #B`). Quoted syntax in code is ignored. `lint.mjs` exports `lintPrBody`. |
 | `actions/file-failure-issue` | composite | File an issue for an unwatched automation failure, reusing an open match instead of duplicating (`mode: file`, the default), or close that issue once the failure stops recurring (`mode: close`, which also takes `additional-titles` and `title-prefix` and closes every match). |
-| `actions/check-migration-locks` | composite | Fail a Prisma migration that takes a heavy lock on an existing table without `SET LOCAL lock_timeout`, or runs `CREATE INDEX CONCURRENTLY` beside another statement. `since` grandfathers applied migrations. |
+| `actions/check-migration-locks` | composite | Fail a Prisma migration that takes a heavy lock on an existing table without `SET LOCAL lock_timeout`, runs `CREATE INDEX CONCURRENTLY` beside another statement, or adds a `NOT NULL` column with no `DEFAULT` to an existing table. `since` grandfathers applied migrations. The checker ships with the action. |
 | `actions/check-action-pins` | composite | Fail on an unpinned or drifting `uses:` — third-party actions off a SHA, org actions on `@main`, or the same action split across majors. |
 | `actions/build` | composite | Run the repo's build script; optional workspace filter. |
 | `actions/deploy-target` | composite | Decide whether a push deploys — branch match plus an optional path match — in one place. The copy a Vercel `ignoreCommand` vendors is kept honest by `check-vendored-copy`. |
@@ -27,11 +27,11 @@ identical across them.
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
 | `actions/unit-test` | composite | Unit tests with coverage. The coverage gate is off by default (`min-coverage: '0'`); set it to enforce a minimum line-coverage percentage. |
 | `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. An unparseable manifest, or a scan that finds no dependencies (unless `allow-empty: 'true'`), fails. |
-| `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). Measures, never judges. |
-| `actions/cwv-judge` | composite | Fail only on a Core Web Vitals regression that **holds across nights** — over the floor and over a rise factor against the rolling median for N consecutive nights. Too little history passes open and says `insufficient-history`. |
+| `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). `http2: 'true'` measures through an HTTP/2 front. Measures, never judges. |
+| `actions/cwv-judge` | composite | Fail only on a Core Web Vitals regression that **holds across nights** — over the floor and over a rise factor against the rolling median for N consecutive nights. Too little history passes open and says `insufficient-history`. Per-route allowances with an issue and an expiry; history in an artifact or on a ledger branch. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
-| `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. |
+| `.github/workflows/scheduled-ops.yml` | reusable | Cron-triggered dependency bump PR + stale issue/PR sweep. Takes `GMI_PACKAGES_TOKEN` (via `secrets: inherit`) for a repo on private `@gmi/*` packages. |
 | `.github/workflows/post-deploy-probe.yml` | reusable | Probe a URL set, assert status/headers/body, file an issue on failure. |
 | `.github/workflows/nightly-cwv.yml` | reusable | Nightly LCP / TBT / CLS over a product's prerendered routes (build, serve, `cwv-measure`, `cwv-judge`, rolling history, failure issue). |
 
@@ -438,6 +438,14 @@ jobs:
     secrets: inherit
 ```
 
+**Private `@gmi/*` packages.** The job runs its own `npm ci`, and a caller's workflow-level `env:`
+does not reach a called workflow, so the packages token has to be handed over as a secret.
+`secrets: inherit` does it with no mapping (the workflow reads `GMI_PACKAGES_TOKEN` by name); to pass
+only that one, use `secrets: { packages-token: ${{ secrets.GMI_PACKAGES_TOKEN }} }`. Either way it
+becomes the job's `NODE_AUTH_TOKEN`, which the product's own `.npmrc`
+(`@garrettmakesitllc:registry=https://npm.pkg.github.com`) reads. `GITHUB_TOKEN` cannot read packages
+another repo owns.
+
 Build the app **with prerender**: a preview that answers a marketing route with the client-rendered
 shell measures a page production never serves. `serve-command` must bind `base-url` strictly (no
 fallback port), or the sweep measures whatever else answers there. Leave `serve-command` empty and
@@ -462,12 +470,45 @@ night is reported (table, `::warning`, step summary), never failed.
 The defaults come from the MuscleBuddy lane's recorded history; tune them against your own routes'
 nights, not by guessing.
 
+**Route allowances.** Where the floor is measured to be the wrong number for one route on this rig,
+`route-allowances` holds that route and metric to a higher ceiling:
+
+```yaml
+    with:
+      route-allowances: >-
+        [{"route": "/", "metric": "LCP", "ceiling": 3300,
+          "reason": "hero video poster is the LCP element; 3.0-3.2 s across 14 nights",
+          "issue": "#6188", "expires": "2026-12-31"}]
+```
+
+The ceiling replaces the floor in the gate for that route and metric only, so a rise that holds over
+the ceiling still fails — it is a ceiling, not an exemption. Every field is required. On the day after
+`expires` the allowance stops applying and the lane fails with `expired-allowance` until it is renewed
+(a new date, with the measurement behind it) or deleted. An allowance naming a route that was not
+measured is a `::warning`. Any measurement over its floor that did not fail the night is marked `†` in
+the table and named in a `::warning` that says whether the gate cleared it or had too little history
+to judge it — the two must never read the same.
+
 **State across nights** is one workflow artifact (`history-artifact`, default `cwv-history`) holding
 the last 30 night records, scoped to the ref that ran. Each night downloads it, judges against it,
 appends tonight (green or red — a ledger of only the good nights proves nothing was slow) and
 re-uploads it, which also refreshes its retention (`history-retention-days`, default 30). Give each
 route set its own `history-artifact` name. The judge needs `actions: read`, which the workflow
 declares. A lane that skips longer than the retention restarts cold.
+
+`history-branch` keeps the history on a branch instead — one `<history-path>/<YYYY-MM-DD>.json` per
+night (default path `perf/cwv`), read before judging and written after, green or red. It does not
+expire and doubles as an evidence ledger. The branch must already exist, and writing needs
+`contents: write` on it, which this workflow cannot grant itself past the caller's token: pass
+`history-token`, or run `cwv-judge` with `history-branch` in a job of your own that holds
+`contents: write`. A missing branch or directory is a cold start; any other read failure fails the
+lane before judging, and a failed write fails it after.
+
+The history reader accepts two record shapes, so a lane that already keeps a ledger keeps its
+baseline: this judge's own night record (`{ date, routes: { "/x": { lcpMs, tbtMs, cls } } }`, what
+`cwv-measure` writes), and a per-route list (`{ measurements: [{ route, lcpMs, tbtMs, cls }] }`).
+Point `history-branch`/`history-path` at the existing ledger directory, or fetch it yourself and pass
+`history-dir`.
 
 **Not enough history fails open, loudly.** The gate reads `baseline-nights + sustain-nights - 1`
 prior nights (9 by default) for each route; with fewer, the verdict is `insufficient-history` — a
@@ -483,8 +524,12 @@ that cannot be measured is listed UNMEASURED and does not stop the others.
 the trend and regression detection against a fixed rig, not figures comparable to PageSpeed
 Insights or real users. INP is not measured (a lab run has nobody interacting; TBT is its proxy).
 Lighthouse models HTTP/1.1's six-connection cap, so a server speaking HTTP/1.1 (such as `vite
-preview`) over-charges a page with many modulepreloaded chunks relative to production's HTTP/2. The
-trend is still valid against itself; for absolute fidelity measure an HTTP/2 URL.
+preview`) over-charges a page with many modulepreloaded chunks relative to production's HTTP/2.
+`http2: true` measures through an HTTP/2 front over `base-url` (a plain `http://` origin): TLS with a
+throwaway self-signed certificate that Chrome is told to accept by key, a reverse proxy that leaves
+content types, rewrites and `content-encoding` to the upstream. The night record says which
+transport it measured (`transport`). Switching it on steps the numbers down, which the gate never
+reads as a regression; the baseline catches up within `baseline-nights`.
 
 On failure the lane files (or updates) one issue titled `issue-title` and closes it with a comment on
 the next `clean` night, through `file-failure-issue`.

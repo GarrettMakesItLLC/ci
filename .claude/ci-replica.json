@@ -48,6 +48,7 @@
       "budgetSeconds": 60,
       "commands": [
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations --expect fail",
+        "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/violations-not-null --expect fail",
         "scripts/run-composite.py actions/check-migration-locks --input since=20260101000000 --input migrations-dir=.github/fixtures/check-migration-locks/clean"
       ]
     },
@@ -78,7 +79,10 @@
         "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/regression/tonight.json --input history-dir=.github/fixtures/cwv-judge/regression --expect fail",
         "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/single-night-spike/tonight.json --input history-dir=.github/fixtures/cwv-judge/single-night-spike --expect-output verdict=clean",
         "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/under-floor/tonight.json --input history-dir=.github/fixtures/cwv-judge/under-floor --expect-output verdict=clean",
-        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/cold-start/tonight.json --input history-dir=.github/fixtures/cwv-judge/cold-start --expect-output verdict=insufficient-history"
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/cold-start/tonight.json --input history-dir=.github/fixtures/cwv-judge/cold-start --expect-output verdict=insufficient-history",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/regression/tonight.json --input history-dir=.github/fixtures/cwv-judge/regression --input 'route-allowances=[{\"route\":\"/\",\"metric\":\"LCP\",\"ceiling\":3000,\"reason\":\"fixture: the held 2.8 s rise sits under this ceiling\",\"issue\":\"#101\",\"expires\":\"2099-12-31\"}]' --expect-output verdict=clean",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/single-night-spike/tonight.json --input history-dir=.github/fixtures/cwv-judge/single-night-spike --input 'route-allowances=[{\"route\":\"/\",\"metric\":\"LCP\",\"ceiling\":3000,\"reason\":\"fixture: expired the day before tonight\",\"issue\":\"#101\",\"expires\":\"2026-09-09\"}]' --expect fail --expect-output verdict=expired-allowance",
+        "scripts/run-composite.py actions/cwv-judge --input measurements-file=.github/fixtures/cwv-judge/ledger-import/tonight.json --input history-dir=.github/fixtures/cwv-judge/ledger-import --expect fail --expect-output verdict=regression"
       ]
     },
     {

@@ -8,6 +8,7 @@ import { launch } from 'chrome-launcher';
 import lighthouse from 'lighthouse';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { startH2Front } from './h2-front.mjs';
 
 export function median(values) {
   if (values.length === 0) return undefined;
@@ -58,15 +59,20 @@ async function main() {
   if (!Number.isInteger(runs) || runs < 1) throw new Error(`runs must be a positive integer, got "${process.env.CWV_RUNS}"`);
   const routes = parseRoutes(process.env.CWV_ROUTES ?? '');
   if (routes.length === 0) throw new Error('no routes to measure');
+  const http2 = process.env.CWV_HTTP2 === 'true';
 
-  const chrome = await launch({
-    chromePath: process.env.CWV_CHROME_PATH || undefined,
-    chromeFlags: ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-  });
+  // A front that cannot start is a rig failure and stops here, before any route is measured over a
+  // transport the caller did not ask for.
+  const front = http2 ? await startH2Front(baseUrl) : undefined;
+  const measureOrigin = front?.origin ?? baseUrl;
+  if (front) console.log(`Measuring through an HTTP/2 front at ${front.origin} over ${baseUrl}.`);
+  const chromeFlags = ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
+  if (front) chromeFlags.push(`--ignore-certificate-errors-spki-list=${front.spkiSha256}`);
+  const chrome = await launch({ chromePath: process.env.CWV_CHROME_PATH || undefined, chromeFlags });
   const measured = {};
   try {
     for (const route of routes) {
-      const url = new URL(route, baseUrl).toString();
+      const url = new URL(route, measureOrigin).toString();
       const samples = [];
       let firstError;
       for (let i = 0; i < runs; i += 1) {
@@ -92,11 +98,12 @@ async function main() {
     }
   } finally {
     await chrome.kill();
+    await front?.close();
   }
 
   const date = process.env.CWV_DATE || new Date().toISOString().slice(0, 10);
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, `${JSON.stringify({ date, baseUrl, formFactor, runs, routes: measured }, null, 2)}\n`);
+  writeFileSync(out, `${JSON.stringify({ date, baseUrl, transport: http2 ? 'h2' : 'as-served', formFactor, runs, routes: measured }, null, 2)}\n`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

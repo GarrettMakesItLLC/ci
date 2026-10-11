@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit cases for check-dependency-licenses, check-migration-order, check-required-checks,
+# Unit cases for check-dependency-licenses, check-migration-locks, check-migration-order, check-required-checks,
 # check-vendored-copy and pr-body-lint, through the real scripts (the migration and
 # vendored-copy suites also drive the CLI against temp git repos and files).
 # Run by self-check.yml and by the degraded-mode replica (.claude/ci-replica.json).
@@ -12,4 +12,5 @@ node --test \
   actions/check-vendored-copy/check.test.mjs \
   actions/pr-body-lint/lint.test.mjs \
   actions/release-cut-gate/gate.test.mjs
+bash actions/check-migration-locks/check.test.sh
 bash scripts/e2e-test-install-only.test.sh
