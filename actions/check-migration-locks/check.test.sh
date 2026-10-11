@@ -61,6 +61,40 @@ t 0 'CREATE TABLE "W" ("id" TEXT); ALTER TABLE "W" ADD COLUMN "x" TEXT NOT NULL;
 out="$(printf '%s' 'ALTER TABLE "User" ADD COLUMN "x" TEXT NOT NULL;' | python3 "$CHECK" - 2>&1 >/dev/null)"
 [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] || { echo "FAIL: expected a lock_timeout and a NOT NULL violation, got: $out"; fail=1; }
 
+# ALTER COLUMN SET NOT NULL on an existing table scans it under ACCESS EXCLUSIVE.
+t 1 "$LT ALTER TABLE \"User\" ALTER COLUMN \"x\" SET NOT NULL;"
+t 1 "$LT ALTER TABLE \"User\" ADD COLUMN \"a\" TEXT, ALTER COLUMN \"x\" SET NOT NULL;"
+t 0 "$LT ALTER TABLE \"User\" ALTER COLUMN \"x\" DROP NOT NULL;"
+t 0 "$LT ALTER TABLE \"User\" ALTER COLUMN \"x\" SET DEFAULT 1;"
+t 0 'CREATE TABLE "W" ("id" TEXT); ALTER TABLE "W" ALTER COLUMN "id" SET NOT NULL;'
+
+# An enum value cannot be used in the transaction that adds it.
+t 1 "ALTER TYPE \"Role\" ADD VALUE 'ADMIN'; UPDATE \"User\" SET \"role\" = 'ADMIN';"
+t 1 "ALTER TYPE \"Role\" ADD VALUE IF NOT EXISTS 'ADMIN'; CREATE TABLE \"W\" (\"r\" \"Role\" DEFAULT 'ADMIN');"
+t 0 "ALTER TYPE \"Role\" ADD VALUE 'ADMIN';"
+t 0 "ALTER TYPE \"Role\" ADD VALUE 'ADMIN'; ALTER TYPE \"Role\" ADD VALUE 'OWNER';"
+t 0 "ALTER TYPE \"Role\" ADD VALUE 'ADMIN'; -- 'ADMIN' is used next migration"
+t 0 "ALTER TYPE \"Role\" ADD VALUE 'ADMIN'; UPDATE \"User\" SET \"role\" = 'OWNER';"
+
+# Constraints without NOT VALID are opt-in: Prisma's own foreign keys would fail them.
+FK="$LT ALTER TABLE \"Post\" ADD CONSTRAINT \"f\" FOREIGN KEY (\"u\") REFERENCES \"User\"(\"id\");"
+CK="$LT ALTER TABLE \"Post\" ADD CONSTRAINT \"c\" CHECK (\"n\" > 0);"
+t 0 "$FK"
+t 0 "$CK"
+s() {
+  local want="$1" sql="$2" got
+  printf '%s' "$sql" | python3 "$CHECK" --strict-constraints - >/dev/null 2>&1
+  got=$?
+  [ "$got" = "$want" ] || { echo "FAIL (strict): want $want got $got for: $sql"; fail=1; }
+}
+s 1 "$FK"
+s 1 "$CK"
+s 0 "${FK%;} NOT VALID;"
+s 0 "${CK%;} NOT VALID;"
+s 0 "$LT ALTER TABLE \"Post\" VALIDATE CONSTRAINT \"f\";"
+s 0 "$LT ALTER TABLE \"Post\" ADD CONSTRAINT \"u\" UNIQUE (\"a\");"
+s 0 'CREATE TABLE "W" ("id" TEXT); ALTER TABLE "W" ADD CONSTRAINT "c" CHECK ("id" <> '"''"');'
+
 # --since skips migrations older than the cutoff, by directory timestamp.
 mkdir -p "$TMP/m/20250101093722_old" "$TMP/m/20260901093722_new"
 echo 'ALTER TABLE "User" ADD COLUMN "a" TEXT;' > "$TMP/m/20250101093722_old/migration.sql"

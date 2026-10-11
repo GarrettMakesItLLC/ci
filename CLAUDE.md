@@ -23,6 +23,9 @@ staging tier for a shared action. That asymmetry drives every rule below.
   invisible before: the fix for MuscleBuddy#3946/#3947 sat untagged while two closed issues said it
   had shipped and the consumer went on running the pre-fix revision (MuscleBuddy#5764).
 - Adding a required input is breaking. Adding an optional input with a default is not.
+- **Adding a permission to a reusable workflow (top-level or job) is breaking.** A called workflow
+  cannot exceed its caller's permission ceiling, so every caller lacking it fails at
+  `startup_failure` (see ci#114).
 - **Prefer a composite action over a reusable workflow for anything a ruleset requires.** A job
   calling a reusable workflow emits a check named `<caller-job> / <callee-job>`, which cannot match the
   bare `CI Success` and `Semantic PR Title` contexts the rulesets require. A composite action runs
