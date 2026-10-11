@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check Prisma migration SQL against the lock and unsafe-DDL rules.
 
-    migration-lock-check.py [--since YYYYMMDDHHMMSS] <migration.sql>... | -
+    migration-lock-check.py [--since YYYYMMDDHHMMSS] [--strict-constraints] <migration.sql>... | -
 
 1. A statement that takes a heavy lock (ALTER TABLE, DROP, a plain CREATE INDEX)
    on a table that already exists must come after `SET LOCAL lock_timeout`.
@@ -16,6 +16,18 @@
    is live, against every row the table already holds; on a non-empty table the
    statement fails mid-deploy. Add the column nullable, backfill, and set
    `NOT NULL` a deploy later, or give it a default.
+
+4. `ALTER TABLE ... ALTER COLUMN ... SET NOT NULL` on a table that already exists.
+   Postgres scans the whole table under ACCESS EXCLUSIVE to prove no NULL is
+   present. Add a `CHECK (col IS NOT NULL) NOT VALID`, `VALIDATE CONSTRAINT` it
+   in a later migration, then `SET NOT NULL` (Postgres 12+ skips the scan).
+5. `ALTER TYPE ... ADD VALUE 'x'` where `'x'` is also used in the same
+   migration. A new enum value cannot be used in the transaction that adds it
+   (`unsafe use of new value`).
+6. Opt-in, `--strict-constraints`: `ADD CONSTRAINT ... CHECK | FOREIGN KEY`
+   without `NOT VALID` on an existing table. Postgres validates every existing
+   row under a heavy lock. Off by default because Prisma generates exactly that
+   foreign key whenever a relation is added to an existing table.
 
 `-` reads one migration from stdin (the PreToolUse hook's path). `--since`
 skips any file whose migration directory timestamp sorts before it, so a repo
@@ -43,6 +55,9 @@ ADD_COLUMN = re.compile(r"^ADD\s+(COLUMN\s|(?!(CONSTRAINT|PRIMARY|UNIQUE|FOREIGN
 NOT_NULL = re.compile(r"\bNOT\s+NULL\b", re.I)
 DEFAULT = re.compile(r"\bDEFAULT\b", re.I)
 GENERATED = re.compile(r"\bGENERATED\b", re.I)
+ADD_CONSTRAINT = re.compile(r"^ADD\s+(CONSTRAINT\s+\S+\s+)?(CHECK|FOREIGN\s+KEY)\b", re.I)
+NOT_VALID = re.compile(r"\bNOT\s+VALID\b", re.I)
+ADD_VALUE = re.compile(r"\bALTER\s+TYPE\s+\S+\s+ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?('(?:[^']|'')*')[^;]*;?", re.I)
 TIMESTAMP_DIR = re.compile(r"(?:^|/)(\d{14})_[^/]*/[^/]*$")
 
 
@@ -135,7 +150,55 @@ def not_null_without_default(stmts: list[str], created: set[str]) -> list[str]:
     return found
 
 
-def violations(sql: str) -> list[str]:
+def set_not_null(stmts: list[str], created: set[str]) -> list[str]:
+    found = []
+    for stmt in stmts:
+        m = ALTER_TARGET.match(stmt)
+        if not m or table_name(m.group(3)) in created:
+            continue
+        for clause in top_level_commas(stmt[m.end():]):
+            if re.match(r"^ALTER\s+(COLUMN\s+)?\S+\s+SET\s+NOT\s+NULL\b", clause, re.I):
+                found.append(
+                    f"`{clause[:80]}` sets NOT NULL on a column of an existing table. Postgres "
+                    "scans the whole table under ACCESS EXCLUSIVE to prove no NULL is present. "
+                    "Add `CHECK (col IS NOT NULL) NOT VALID`, VALIDATE it in a later migration, "
+                    "then SET NOT NULL (Postgres 12+ skips the scan)."
+                )
+    return found
+
+
+def unvalidated_constraints(stmts: list[str], created: set[str]) -> list[str]:
+    found = []
+    for stmt in stmts:
+        m = ALTER_TARGET.match(stmt)
+        if not m or table_name(m.group(3)) in created:
+            continue
+        for clause in top_level_commas(stmt[m.end():]):
+            if ADD_CONSTRAINT.match(clause) and not NOT_VALID.search(clause):
+                found.append(
+                    f"`{clause[:80]}` adds a constraint to an existing table without NOT VALID, "
+                    "so Postgres validates every existing row under a heavy lock. Add it "
+                    "`NOT VALID` and run `VALIDATE CONSTRAINT` in a later migration."
+                )
+    return found
+
+
+def enum_value_used_in_same_migration(sql: str) -> list[str]:
+    """A value added by `ALTER TYPE ... ADD VALUE` is unusable until that transaction commits."""
+    bare = re.sub(r"--[^\n]*|/\*.*?\*/", " ", sql, flags=re.S)
+    rest = ADD_VALUE.sub(" ", bare)
+    found = []
+    for m in ADD_VALUE.finditer(bare):
+        if m.group(1) in rest:
+            found.append(
+                f"enum value {m.group(1)} is added and used in the same migration. Postgres "
+                "refuses to use a new enum value in the transaction that adds it "
+                "(`unsafe use of new value`). Add the value in its own migration and use it in the next."
+            )
+    return found
+
+
+def violations(sql: str, strict_constraints: bool = False) -> list[str]:
     stmts = statements(sql)
     if any(CONCURRENT.match(s) for s in stmts):
         found = []
@@ -148,7 +211,15 @@ def violations(sql: str) -> list[str]:
         return found
 
     created = {table_name(m.group(3)) for s in stmts if (m := CREATE_TABLE.match(s))}
-    return lock_timeout_violations(stmts, created) + not_null_without_default(stmts, created)
+    found = (
+        lock_timeout_violations(stmts, created)
+        + not_null_without_default(stmts, created)
+        + set_not_null(stmts, created)
+        + enum_value_used_in_same_migration(sql)
+    )
+    if strict_constraints:
+        found += unvalidated_constraints(stmts, created)
+    return found
 
 
 def lock_timeout_violations(stmts: list[str], created: set[str]) -> list[str]:
@@ -173,12 +244,16 @@ def lock_timeout_violations(stmts: list[str], created: set[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    since = None
+    since, strict = None, False
+    if argv and argv[0] == "--strict-constraints":
+        strict, argv = True, argv[1:]
     if len(argv) >= 2 and argv[0] == "--since":
         since, argv = argv[1], argv[2:]
         if not re.fullmatch(r"\d{14}", since):
             print("--since takes a 14-digit migration timestamp", file=sys.stderr)
             return 2
+    if argv and argv[0] == "--strict-constraints":
+        strict, argv = True, argv[1:]
     if not argv:
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
         return 2
@@ -193,7 +268,7 @@ def main(argv: list[str]) -> int:
                 continue
             with open(path, encoding="utf-8") as f:
                 sql, label = f.read(), path
-        for v in violations(sql):
+        for v in violations(sql, strict):
             print(f"{label}: {v}", file=sys.stderr)
             bad = 1
     return bad

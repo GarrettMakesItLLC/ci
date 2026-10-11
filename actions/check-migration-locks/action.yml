@@ -2,8 +2,11 @@ name: Check migration locks
 description: >
   Fail when a Prisma migration takes a heavy lock on an existing table without
   `SET LOCAL lock_timeout` before it, runs `CREATE INDEX CONCURRENTLY`
-  alongside another statement, or adds a `NOT NULL` column with no `DEFAULT`
-  to an existing table. The checker ships with the action
+  alongside another statement, adds a `NOT NULL` column with no `DEFAULT`
+  to an existing table, runs `ALTER COLUMN ... SET NOT NULL` on an existing
+  table, or uses an enum value in the migration that adds it. With
+  `strict-constraints`, also fails a `CHECK` or `FOREIGN KEY` added without
+  `NOT VALID`. The checker ships with the action
   (`migration-lock-check.py`), so a run fetches nothing.
 
 inputs:
@@ -18,6 +21,15 @@ inputs:
     description: Directory of `<timestamp>_<name>/migration.sql` folders.
     required: false
     default: prisma/migrations
+  strict-constraints:
+    description: >
+      `'true'` also fails `ADD CONSTRAINT ... CHECK | FOREIGN KEY` without
+      `NOT VALID` on an existing table. Off by default: Prisma generates that
+      plain foreign key whenever a relation is added, so enabling it means
+      hand-editing those migrations to `NOT VALID` plus a later
+      `VALIDATE CONSTRAINT`.
+    required: false
+    default: 'false'
   checker-ref:
     description: Ignored. The checker is vendored into this action and versions with the `v1` tag.
     required: false
@@ -32,6 +44,7 @@ runs:
       env:
         SINCE: ${{ inputs.since }}
         MIGRATIONS_DIR: ${{ inputs.migrations-dir }}
+        STRICT_CONSTRAINTS: ${{ inputs.strict-constraints }}
       run: |
         set -euo pipefail
         shopt -s nullglob
@@ -40,5 +53,7 @@ runs:
           echo "::error::no migrations under $MIGRATIONS_DIR — wrong migrations-dir?"
           exit 1
         fi
-        python3 "${{ github.action_path }}/migration-lock-check.py" --since "$SINCE" "${files[@]}"
+        flags=(--since "$SINCE")
+        if [ "$STRICT_CONSTRAINTS" = "true" ]; then flags+=(--strict-constraints); fi
+        python3 "${{ github.action_path }}/migration-lock-check.py" "${flags[@]}" "${files[@]}"
         echo "✓ no lock-rule violations in ${#files[@]} migration(s) (those before $SINCE are grandfathered)"
