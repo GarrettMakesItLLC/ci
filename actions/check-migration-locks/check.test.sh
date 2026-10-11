@@ -25,6 +25,30 @@ t 0 "SET LOCAL lock_timeout = '5s'; ALTER TABLE \"User\" ADD COLUMN \"x\" TEXT;"
 t 1 "ALTER TABLE \"User\" ADD COLUMN \"x\" TEXT; SET LOCAL lock_timeout = '5s';"
 t 1 'DROP INDEX "User_a_idx";'
 t 1 'CREATE UNIQUE INDEX "User_e_key" ON "public"."User"("e");'
+# Session-level SET bounds every later statement on the connection, so it counts.
+t 0 "SET lock_timeout = '5s'; ALTER TABLE \"User\" ADD COLUMN \"x\" TEXT;"
+t 0 "SET SESSION lock_timeout = '5s'; ALTER TABLE \"User\" ADD COLUMN \"x\" TEXT;"
+# --require-begin: SET LOCAL counts only inside the file's own BEGIN; ... COMMIT;.
+r() {
+  local want="$1" sql="$2" got
+  printf '%s' "$sql" | python3 "$CHECK" --require-begin - >/dev/null 2>&1
+  got=$?
+  [ "$got" = "$want" ] || { echo "FAIL (require-begin): want $want got $got for: $sql"; fail=1; }
+}
+ALT='ALTER TABLE "User" ADD COLUMN "x" TEXT;'
+r 1 "SET LOCAL lock_timeout = '5s'; $ALT"
+r 1 "BEGIN; SET LOCAL lock_timeout = '5s'; $ALT"
+r 1 "SET LOCAL lock_timeout = '5s'; $ALT COMMIT;"
+r 0 "BEGIN; SET LOCAL lock_timeout = '5s'; $ALT COMMIT;"
+r 0 "START TRANSACTION; SET LOCAL lock_timeout = '5s'; $ALT COMMIT;"
+r 0 "begin; set local lock_timeout = '5s'; $ALT commit;"
+r 1 "$ALT"
+r 0 "SET lock_timeout = '5s'; $ALT"
+r 0 'CREATE TABLE "W" ("id" TEXT); CREATE INDEX "W_a_idx" ON "W"("a");'
+r 0 'CREATE INDEX CONCURRENTLY "U_a_idx" ON "User"("a");'
+r 1 "BEGIN; CREATE INDEX CONCURRENTLY \"U_a_idx\" ON \"User\"(\"a\"); COMMIT;"
+out="$(printf '%s' "SET LOCAL lock_timeout = '5s'; $ALT" | python3 "$CHECK" --require-begin - 2>&1 >/dev/null)"
+case "$out" in *'opens no `BEGIN;`'*) ;; *) echo "FAIL: message does not name the missing BEGIN: $out"; fail=1 ;; esac
 # Tables the migration creates cannot be contended — unless a foreign key reaches out.
 t 0 'CREATE TABLE "W" ("id" TEXT); CREATE INDEX "W_a_idx" ON "W"("a");'
 t 0 'CREATE TABLE "W" ("id" TEXT); CREATE TABLE "V" ("w" TEXT); ALTER TABLE "V" ADD CONSTRAINT "f" FOREIGN KEY ("w") REFERENCES "W"("id");'
