@@ -4,8 +4,9 @@
 // kept; the persistence gate in `cwv-judge` is what turns the nightly record into a verdict. This
 // script never judges. A route that cannot be measured is recorded with `error` and no metrics —
 // an absent number is not a zero.
-import { launch } from 'chrome-launcher';
-import lighthouse from 'lighthouse';
+//
+// Lighthouse, chrome-launcher and playwright-core are imported where they are used, so the pure
+// helpers below load (and are tested) without the action's dependencies installed.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -87,6 +88,7 @@ export function thirdPartyVerdict(mode, requests) {
 }
 
 async function measureOnce(port, url, formFactor, thirdParty) {
+  const { default: lighthouse } = await import('lighthouse');
   const config =
     formFactor === 'desktop'
       ? { extends: 'lighthouse:default', settings: { formFactor: 'desktop', screenEmulation: { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false }, throttling: { rttMs: 40, throughputKbps: 10240, cpuSlowdownMultiplier: 1, requestLatencyMs: 0, downloadThroughputKbps: 0, uploadThroughputKbps: 0 } } }
@@ -214,6 +216,7 @@ async function main() {
   if (needsContext) {
     rig = await launchContextRig({ chromeFlags: chromeFlags.filter((f) => f !== '--headless=new'), chromePath, setupModule, localStorage, abortPatterns, hideAutomation });
   } else {
+    const { launch } = await import('chrome-launcher');
     const chrome = await launch({ chromePath, chromeFlags });
     rig = { port: chrome.port, prepare: async () => undefined, close: () => chrome.kill() };
   }
