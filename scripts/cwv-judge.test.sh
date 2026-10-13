@@ -5,4 +5,4 @@
 # Run by self-check.yml and by the degraded-mode replica (.claude/ci-replica.json).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-node --test actions/cwv-judge/judge.test.mjs actions/cwv-measure/h2-front.test.mjs
+node --test actions/cwv-judge/judge.test.mjs actions/cwv-measure/h2-front.test.mjs actions/cwv-measure/measure.test.mjs

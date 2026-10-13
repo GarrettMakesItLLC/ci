@@ -27,7 +27,7 @@ identical across them.
 | `actions/security-scan` | composite | Dependency audit + CodeQL SAST, either half switchable off. **The CodeQL half needs `security-events: write` on the calling job** — see below. |
 | `actions/unit-test` | composite | Unit tests with coverage. The coverage gate is off by default (`min-coverage: '0'`); set it to enforce a minimum line-coverage percentage. |
 | `actions/check-dependency-inventory` | composite | Doc-vs-manifest drift check: fails when a direct dependency has no row in a repo's dependency-inventory doc. Manifests scanned, fields checked, workspace-internal prefixes, an allowlist and the doc-match mode are all inputs. An unparseable manifest, or a scan that finds no dependencies (unless `allow-empty: 'true'`), fails. |
-| `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). `http2: 'true'` measures through an HTTP/2 front. Measures, never judges. |
+| `actions/cwv-measure` | composite | Pinned local Lighthouse over a route list at a base URL; writes one night's LCP / TBT / CLS record (median of N runs per route). `http2: 'true'` measures through an HTTP/2 front. `local-storage`, `hide-automation`, `abort-url-patterns` and `third-party` measure a consented or denied visitor; `setup-module` measures routes behind a session or fixture API. Measures, never judges. |
 | `actions/cwv-judge` | composite | Fail only on a Core Web Vitals regression that **holds across nights** — over the floor and over a rise factor against the rolling median for N consecutive nights. Too little history passes open and says `insufficient-history`. Per-route allowances with an issue and an expiry; history in an artifact or on a ledger branch. |
 | `.github/workflows/issue-status-clear.yml` | reusable | Strip `status:*` labels when an issue closes. |
 | `.github/workflows/release-cut.yml` | reusable | Cut a release branch from `dev` and open its promotion PR. |
@@ -416,6 +416,44 @@ own `self-check.yml` to prove the failure path fires on a known-bad fixture with
 against `GarrettMakesItLLC/ci` on every PR. That fixture also sets `fail-run: false` (default `true`),
 which keeps the job green when a probe fails and leaves the verdict in the `result` output
 (`success` / `failure`), so the self-check run itself is not red by design.
+
+### `cwv-measure`: a visitor's state, and routes behind a session
+
+A plain run measures what a stranger's first load costs on a fresh browser. Two cases need more.
+
+**A consented visitor.** A site that loads analytics and ad tags only after consent measures none of
+that cost on a fresh browser, and one whose traffic filter skips automated browsers measures it as
+zero even when consent is seeded. Run `cwv-measure` once per state:
+
+```yaml
+- uses: GarrettMakesItLLC/ci/actions/cwv-measure@v1
+  with:
+    base-url: https://example.com
+    routes: /
+    runs: '3'
+    local-storage: '{"consent":"granted"}'   # seeded on every document, after Lighthouse's storage reset
+    hide-automation: 'true'                  # navigator.webdriver reads false
+    abort-url-patterns: |                    # a measurement is never counted as a visit
+      google-analytics\.com/g/collect
+    third-party: required                    # a run that loaded no third-party request is discarded
+```
+
+With `third-party: none` on the denied run, a seed that did not take cannot pass as a clean baseline.
+Each route's record carries `thirdPartyBytes` and `thirdPartyRequests` (off-origin transfer, medianed
+like the metrics) so the caller can compare the two records.
+
+**Routes behind a session.** `setup-module` names an ES module in the caller's checkout:
+
+```js
+export async function setup(context) {}                       // once: init scripts, routes, cookies
+export async function prepare(context, { route, url }) {}     // per route, before it is measured
+```
+
+`prepare` returns a string to report the route UNMEASURED with that reason (the page never reached
+its loaded state) instead of timing an error card. Any of these inputs launches Chrome through
+Playwright (`playwright-core`, pinned beside Lighthouse, driving the runner's own Chrome), because
+an init script or request route has to live on the browser context to reach the tab Lighthouse
+opens.
 
 ### `nightly-cwv.yml`: nightly Core Web Vitals, failing only on a persistent regression
 

@@ -39,6 +39,46 @@ inputs:
     required: false
     default: ''
 
+  setup-module:
+    description: >
+      Path (in the caller's checkout) of an ES module that prepares the page state a route is
+      measured in, for a product whose routes sit behind a session or fixture API. It may export
+      `setup(context)`, run once on the Playwright browser context (init scripts, request routes,
+      cookies), and `prepare(context, { route, url })`, run before each route, whose returned
+      string reports the route UNMEASURED with that reason instead of timing an error card. The
+      browser is then launched by Playwright, so what the module installs reaches every tab
+      Lighthouse opens. Empty keeps the plain launcher.
+    required: false
+    default: ''
+  local-storage:
+    description: >
+      JSON object of string values written to `localStorage` on every document before the page's
+      own scripts run (Lighthouse resets storage before each run; this runs after the reset), e.g.
+      a recorded consent answer. Launches the Playwright browser.
+    required: false
+    default: ''
+  abort-url-patterns:
+    description: >
+      Newline separated regular expressions; a request whose URL matches one is aborted, so a
+      measurement run is never counted as a visit by an analytics vendor. Launches the Playwright
+      browser.
+    required: false
+    default: ''
+  hide-automation:
+    description: >
+      `true` hides `navigator.webdriver`. A site that loads no tag for an automated browser (its own
+      traffic filter) otherwise measures zero third-party cost. Launches the Playwright browser.
+    required: false
+    default: 'false'
+  third-party:
+    description: >
+      Whether a run must have loaded third-party requests. `any` records them and never discards a
+      run; `required` discards a run that loaded none (a seeded state that did not take); `none`
+      discards a run that loaded some. A route whose every run was discarded is UNMEASURED with the
+      reason.
+    required: false
+    default: any
+
 outputs:
   measurements-file:
     description: Path of the night record written (JSON; feed it to `cwv-judge`).
@@ -64,6 +104,11 @@ runs:
         CWV_FORM_FACTOR: ${{ inputs.form-factor }}
         CWV_CHROME_PATH: ${{ inputs.chrome-path }}
         CWV_HTTP2: ${{ inputs.http2 }}
+        CWV_SETUP_MODULE: ${{ inputs.setup-module }}
+        CWV_LOCAL_STORAGE: ${{ inputs.local-storage }}
+        CWV_ABORT_URL_PATTERNS: ${{ inputs.abort-url-patterns }}
+        CWV_HIDE_AUTOMATION: ${{ inputs.hide-automation }}
+        CWV_THIRD_PARTY: ${{ inputs.third-party }}
         CWV_OUT_INPUT: ${{ inputs.output-file }}
       run: |
         out="${CWV_OUT_INPUT:-${RUNNER_TEMP:-/tmp}/cwv/measurements.json}"
