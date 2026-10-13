@@ -130,7 +130,10 @@ async function launchContextRig({ chromeFlags, chromePath, setupModule, localSto
   const context = await chromium.launchPersistentContext(userDataDir, {
     ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' }),
     headless: true,
+    // Device emulation is Lighthouse's; a Playwright viewport would fight it on the tab it opens.
     viewport: null,
+    // A service worker's fetches bypass the context's routes, so fixtures and aborts would not apply.
+    serviceWorkers: 'block',
     args: ['--remote-debugging-port=0', ...(hideAutomation ? ['--disable-blink-features=AutomationControlled'] : []), ...chromeFlags],
   });
   if (hideAutomation || Object.keys(localStorage).length > 0) {
