@@ -37,7 +37,7 @@ test('future-dated base relaxes the ceiling to just past it, and warns', () => {
   assert.deepEqual(rules(run([stuck], [stuck, '20270301101112_way_later'])), ['future-dated:20270301101112_way_later']);
 });
 
-// Regression: NetWorthy and SideQuest never had this rule.
+// Regression: NetWorthy never had this rule.
 test('round-hour: refused unless baselined', () => {
   const dir = '20260903120000_rounded';
   assert.deepEqual(rules(run([A], [A, dir])), [`round-hour:${dir}`]);

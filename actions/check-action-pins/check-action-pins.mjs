@@ -14,8 +14,6 @@
  *     refusing `GarrettMakesItLLC/*@main` (or any other branch name):
  *     unreviewed CI on this repo, run with this repo's own token, changing
  *     underneath the consumer on someone else's push.
- *   - SideQuest's `checkActionPins.ts` — the same SHA-pin rule and
- *     `TRUSTED_OWNERS` shape, in TypeScript.
  *   - MuscleBuddy's `third-party-action-pinning.test.ts` — the same rule,
  *     but with `owner === 'GarrettMakesItLLC'` blanket-exempted alongside
  *     `actions`. That exemption is the defect this action must not repeat:

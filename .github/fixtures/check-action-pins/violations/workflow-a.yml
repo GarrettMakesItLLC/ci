@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Violation: org-owned action tracking @main — must be refused even
-      # though the owner matches this org (the MuscleBuddy/SideQuest defect
+      # though the owner matches this org (the MuscleBuddy defect
       # this action must not repeat).
       - uses: GarrettMakesItLLC/ci/actions/setup-node-workspace@main
 

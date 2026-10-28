@@ -4,7 +4,7 @@ name: Post-deploy probe
 # this shape — probe a URL set, assert status/headers/body, file an issue on
 # failure — as bespoke Node scripts or inline bash: NetWorthy's
 # public-availability.yml (status + a forbidden SSO-wall substring) and
-# post-deploy-smoke.yml (bare /health status), SideQuest's live-headers.yml
+# post-deploy-smoke.yml (bare /health status), a live-headers.yml
 # (required/contains header assertions against a deployed CSP), and the
 # status-check halves of AdventureOS's post-deploy-smoke.yml and
 # RedThreadEvents's deploy-verify.yml. What's genuinely identical across all
